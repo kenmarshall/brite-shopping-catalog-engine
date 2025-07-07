@@ -1,0 +1,9 @@
+langchain
+beautifulsoup4
+requests
+sentence-transformers
+faiss-cpu
+pymongo
+ollama
+huggingface-hub
+python-dotenv
