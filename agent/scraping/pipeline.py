@@ -121,12 +121,28 @@ def run_scrape(
 ) -> dict[str, Any] | None:
     if not store_id and not url:
         raise ValueError("store_id or url required")
-    loop = asyncio.get_event_loop()
-    if store_id:
-        return loop.run_until_complete(scrape_store(store_id, use_playwright=use_playwright))
-    return loop.run_until_complete(
-        scrape_url(url=url or "", store_id=store_id, use_playwright=use_playwright)
-    )
+    async def runner() -> dict[str, Any] | None:
+        if store_id:
+            return await scrape_store(store_id, use_playwright=use_playwright)
+        return await scrape_url(url=url or "", store_id=store_id, use_playwright=use_playwright)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(runner())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    if loop.is_running():
+        raise RuntimeError(
+            "run_scrape cannot be called from within a running event loop; "
+            "use `await scrape_store(...)` or `await scrape_url(...)` instead."
+        )
+    return loop.run_until_complete(runner())
 
 
 __all__ = [

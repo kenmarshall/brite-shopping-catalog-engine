@@ -12,14 +12,22 @@ class MongoSettings(BaseSettings):
     collection_stores: str = Field("stores", alias="MONGO_COLLECTION_STORES")
     collection_jobs: str = Field("scrape_jobs", alias="MONGO_COLLECTION_JOBS")
 
-    model_config = SettingsConfigDict(env_file=Path(".env"), env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=Path(".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 class OllamaSettings(BaseSettings):
     base_url: HttpUrl = Field("http://localhost:11434", alias="OLLAMA_BASE_URL")
     embed_model: str = Field("nomic-embed-text", alias="OLLAMA_EMBED_MODEL")
 
-    model_config = SettingsConfigDict(env_file=Path(".env"), env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=Path(".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 class ScraperSettings(BaseSettings):
@@ -27,7 +35,11 @@ class ScraperSettings(BaseSettings):
     max_concurrency: int = Field(4, alias="MAX_CONCURRENCY")
     headless: bool = Field(True, alias="HEADLESS")
 
-    model_config = SettingsConfigDict(env_file=Path(".env"), env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=Path(".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 class Settings(BaseSettings):
@@ -39,7 +51,11 @@ class Settings(BaseSettings):
     faiss_index_path: Path = data_dir / "faiss.index"
     faiss_meta_path: Path = data_dir / "faiss_meta.json"
 
-    model_config = SettingsConfigDict(env_file=Path(".env"), env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=Path(".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 @lru_cache

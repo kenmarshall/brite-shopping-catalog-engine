@@ -1,22 +1,22 @@
-- store_id: "demo-grocer"
-  store_name: "Demo Grocer"
-  base_url: "https://example.com"
+- store_id: "grace-foods"
+  store_name: "Grace Foods"
+  base_url: "https://gracefoods.com"
   auth:
     strategy: none
-    storage_state_path: "./data/sessions/demo-grocer.json"
+    storage_state_path: "./data/sessions/grace-foods.json"
   navigation:
     start_paths:
-      - "https://raw.githubusercontent.com/factbook/fixtures/main/jamaica/demo-grocer.html"
+      - "https://gracefoods.com/products"
     pagination:
-      next_selector: null
+      next_selector: ".noo_pagination li:not(.disabled) > a[title='Next']"
   selectors:
-    product: ".product"
-    name: ".name"
-    price: ".price"
-    image: "img::attr(src)"
-    size_hint: ".name"
-    brand_hint: ".brand"
-    category_hint: ".category"
+    product: ".noo_product"
+    name: ".jshop_information .name"
+    price: ".jshop_information .price"
+    image: ".image_block img::attr(src)"
+    size_hint: ".jshop_information .name"
+    brand_hint: null
+    category_hint: null
     location_hint: null
   rate_limits:
     rpm: 30
