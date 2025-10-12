@@ -27,7 +27,8 @@ class FaissIndex:
             LOGGER.info("Loading FAISS index from %s", self.index_path)
             self.index = faiss.read_index(str(self.index_path))
         if self.metadata_path.exists():
-            self.metadata = json.loads(self.metadata_path.read_text())
+            raw = json.loads(self.metadata_path.read_text())
+            self.metadata = {int(k): v for k, v in raw.items()}
 
     def _ensure_index(self, dim: int) -> None:
         if self.index is None:
@@ -58,7 +59,8 @@ class FaissIndex:
             return
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         faiss.write_index(self.index, str(self.index_path))
-        self.metadata_path.write_text(json.dumps(self.metadata))
+        serializable = {str(k): v for k, v in self.metadata.items()}
+        self.metadata_path.write_text(json.dumps(serializable))
 
     def search(self, vector: list[float], k: int = 10) -> list[tuple[str, float]]:
         if self.index is None:

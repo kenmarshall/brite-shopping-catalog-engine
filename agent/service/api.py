@@ -196,15 +196,18 @@ def search(
         "tag_candidates": tag_candidates,
     }
     for product_id, score in blended[: payload.k]:
-        obj_id = None
-        try:
-            obj_id = ObjectId(product_id)
-        except Exception:
-            obj_id = product_id  # type: ignore[assignment]
-        product = products.find_one({"_id": obj_id})
-        if not product and obj_id != product_id:
-            product = products.find_one({"_id": product_id})
+        query_ids: list[Any] = []
+        if ObjectId.is_valid(product_id):
+            query_ids.append(ObjectId(product_id))
+        query_ids.append(product_id)
+
+        product = None
+        for candidate_id in query_ids:
+            product = products.find_one({"_id": candidate_id})
+            if product:
+                break
         if not product:
+            LOGGER.warning("Search candidate %s not found in Mongo", product_id)
             continue
         final_items.append(
             ProductOut(
