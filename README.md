@@ -15,9 +15,15 @@ Agentic scraper and product indexing service for Jamaican grocery stores. This r
 
 ```bash
 cp .env.example .env
+python -m venv .venv
+source .venv/bin/activate
 make setup
 make dev  # http://localhost:8000/docs
 ```
+
+> **Tip:** `make setup` installs project dependencies into the currently active Python environment. Creating and activating a
+> virtual environment (such as `.venv`) keeps those dependencies isolated from your global Python installation, which avoids
+> version conflicts across projects.
 
 Launch a demo scrape (uses configuration from `agent/config/stores.yml`):
 
