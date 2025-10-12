@@ -1,0 +1,23 @@
+- store_id: "demo-grocer"
+  store_name: "Demo Grocer"
+  base_url: "https://example.com"
+  auth:
+    strategy: none
+    storage_state_path: "./data/sessions/demo-grocer.json"
+  navigation:
+    start_paths:
+      - "https://raw.githubusercontent.com/factbook/fixtures/main/jamaica/demo-grocer.html"
+    pagination:
+      next_selector: null
+  selectors:
+    product: ".product"
+    name: ".name"
+    price: ".price"
+    image: "img::attr(src)"
+    size_hint: ".name"
+    brand_hint: ".brand"
+    category_hint: ".category"
+    location_hint: null
+  rate_limits:
+    rpm: 30
+    concurrency: 2
