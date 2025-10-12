@@ -119,3 +119,28 @@ async def test_embedding_disabled_after_empty_payload(monkeypatch):
     assert enriched.embedding is None
     assert enricher._EMBEDDINGS_DISABLED is True
     assert enriched.tags == ["alpha", "beta", "gamma", "delta", "epsilon"]
+
+
+@pytest.mark.asyncio()
+async def test_low_quality_tags_are_filtered(monkeypatch):
+    monkeypatch.setattr(enricher, "_EMBEDDINGS_DISABLED", True)
+    product = _build_product(
+        name="Grace Ackees",
+        normalized_name="grace ackees",
+        category="Canned Fruit",
+    )
+
+    async def fake_generate_tags(_prompt: str) -> list[str]:
+        return [
+            "i cant provide information on a specific product",
+            "assuming grace ackees is a type of food",
+            "here are five possible tags",
+            "Ackee Fruit",
+            "Grace Brand",
+        ]
+
+    monkeypatch.setattr(enricher, "_generate_tags", fake_generate_tags)
+
+    enriched = await enricher.enrich_product(product)
+
+    assert enriched.tags == ["ackee fruit", "grace brand", "grace", "canned fruit", "ackees"]

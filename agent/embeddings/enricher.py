@@ -20,6 +20,16 @@ from agent.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 TAG_SPLIT_PATTERN = re.compile(r"[,\n]")
+BAD_TAG_PHRASES = {
+    "i cant",
+    "i can",
+    "here are",
+    "assuming",
+    "guideline",
+    "unknown",
+    "provide information",
+    "general",
+}
 _EMBEDDINGS_DISABLED = False
 
 
@@ -34,11 +44,25 @@ def _clean_tag(tag: str) -> str | None:
     return cleaned
 
 
+def _is_quality_tag(tag: str) -> bool:
+    if not tag:
+        return False
+    if len(tag) > 32:
+        return False
+    if tag.count(" ") >= 3:
+        return False
+    if not re.search(r"[a-z]", tag):
+        return False
+    if any(phrase in tag for phrase in BAD_TAG_PHRASES):
+        return False
+    return True
+
+
 def _normalize_tags(tags: Iterable[str]) -> list[str]:
     seen: dict[str, str] = {}
     for tag in tags:
         cleaned = _clean_tag(tag)
-        if cleaned and cleaned not in seen:
+        if cleaned and cleaned not in seen and _is_quality_tag(cleaned):
             seen[cleaned] = cleaned
     return list(seen.values())
 
@@ -94,6 +118,11 @@ def _fallback_tags(product: Product) -> list[str]:
     return _normalize_tags(tags)
 
 
+def _name_tokens(product: Product) -> list[str]:
+    tokens = re.split(r"\s+", product.normalized_name)
+    return _normalize_tags(tokens)
+
+
 async def enrich_product(product: Product) -> Product:
     prompt = (
         "You are a grocery taxonomy assistant. "
@@ -116,6 +145,12 @@ async def enrich_product(product: Product) -> Product:
             for fallback_tag in _fallback_tags(product):
                 if fallback_tag not in tags:
                     tags.append(fallback_tag)
+                if len(tags) >= 5:
+                    break
+        if len(tags) < 5:
+            for token in _name_tokens(product):
+                if token not in tags:
+                    tags.append(token)
                 if len(tags) >= 5:
                     break
         product.tags = tags[:5]
