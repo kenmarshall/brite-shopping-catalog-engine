@@ -31,31 +31,34 @@ class OllamaClient:
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=60.0)
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        payload = {"model": self.model, "input": list(texts)}
-        LOGGER.debug("Embedding %d texts", len(texts))
-        response = await self._client.post("/api/embeddings", json=payload)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                detail = "embedding model not found"
-                try:
-                    detail_json = exc.response.json()
-                    detail = detail_json.get("error", detail)
-                except Exception:  # pragma: no cover - non-json response
-                    detail = exc.response.text or detail
-                raise EmbeddingModelUnavailable(detail) from exc
-            raise
-        data = response.json()
-        embeddings = data.get("data", [])
-        if isinstance(embeddings, dict) and "embedding" in embeddings:
-            embeddings = [embeddings["embedding"]]
-        else:
-            embeddings = [item["embedding"] for item in embeddings]
-
-        if not embeddings or not embeddings[0]:
-            raise EmbeddingResponseError("empty embedding payload from Ollama")
-        return embeddings
+        results: list[list[float]] = []
+        for text in texts:
+            payload = {"model": self.model, "prompt": text}
+            LOGGER.debug("Embedding text (%d chars)", len(text))
+            response = await self._client.post("/api/embeddings", json=payload)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:  # pragma: no cover - network dependent
+                if exc.response.status_code == 404:
+                    detail = "embedding model not found"
+                    try:
+                        detail_json = exc.response.json()
+                        detail = detail_json.get("error", detail)
+                    except Exception:  # pragma: no cover - non-json response
+                        detail = exc.response.text or detail
+                    raise EmbeddingModelUnavailable(detail) from exc
+                raise
+            data = response.json()
+            vector: list[float] | None = None
+            if isinstance(data, dict):
+                if "embedding" in data:
+                    vector = data.get("embedding")
+                elif "data" in data and data["data"]:
+                    vector = data["data"][0].get("embedding")
+            if not vector:
+                raise EmbeddingResponseError("empty embedding payload from Ollama")
+            results.append(vector)
+        return results
 
     async def close(self) -> None:
         await self._client.aclose()

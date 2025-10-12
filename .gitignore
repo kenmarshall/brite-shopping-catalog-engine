@@ -4,3 +4,5 @@ __pycache__/
 venv
 .venv
 .env
+data/faiss.index
+data/faiss_meta.json

@@ -12,7 +12,7 @@ from agent.config.settings import Settings, get_settings
 from agent.db.mongo import MongoService
 from agent.embeddings.faiss_index import FaissIndex
 from agent.embeddings.featurizer import build_embedding_text
-from agent.embeddings.ollama_client import embed_sync
+from agent.embeddings.ollama_client import EmbeddingError, embed_sync
 from agent.scraping.pipeline import run_scrape
 from agent.service.ranking import blend_scores, regex_search, text_search
 from agent.utils.logging import get_logger
@@ -121,9 +121,16 @@ def rebuild_index(
     for product in products:
         vector = product.get("embedding")
         if not vector:
-            product_model = build_product_model(product)
+            product_data = dict(product)
+            if "_id" in product_data:
+                product_data["_id"] = str(product_data["_id"])
+            product_model = build_product_model(product_data)
             text = build_embedding_text(product_model)
-            vector = embed_sync([text])[0]
+            try:
+                vector = embed_sync([text])[0]
+            except EmbeddingError as exc:
+                LOGGER.error("Embedding regeneration failed for %s: %s", product_model.name, exc)
+                continue
             mongo.update_embedding(product["_id"], vector)
         vectors.append(vector)
         ids.append(str(product["_id"]))
