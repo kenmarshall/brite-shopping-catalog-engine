@@ -11,6 +11,7 @@ import yaml
 from agent.config.settings import get_settings
 from agent.db import models
 from agent.db.mongo import MongoService
+from agent.embeddings.enricher import enrich_product
 from agent.scraping import parsers
 from agent.scraping.playwright_client import fetch_html
 from agent.utils.logging import get_logger
@@ -61,6 +62,7 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
                 product = parsers.raw_to_product(raw, store_id=store_id, store_name=store_name)
                 product.updated_at = datetime.utcnow()
                 product.created_at = datetime.utcnow()
+                product = await enrich_product(product)
                 _, created = mongo.upsert_product(product)
                 if created:
                     stats.saved += 1
@@ -98,6 +100,7 @@ async def scrape_url(
             product = parsers.raw_to_product(
                 raw, store_id=store_id or "external", store_name=store_name
             )
+            product = await enrich_product(product)
             _, created = mongo.upsert_product(product)
             if created:
                 stats.saved += 1

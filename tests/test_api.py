@@ -76,6 +76,19 @@ class FakeMongoService:
     def __init__(self) -> None:
         self.products = FakeCollection()
         self.jobs = FakeCollection()
+        class _Client:
+            class _Admin:
+                @staticmethod
+                def command(_cmd):
+                    return {"ok": 1}
+
+            admin = _Admin()
+
+            @staticmethod
+            def close():
+                return None
+
+        self.client = _Client()
 
     def list_products(self, query: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         return self.products.list_all(query)
@@ -127,6 +140,31 @@ def test_client(tmp_path, mongo_service, monkeypatch):
     monkeypatch.setattr(
         "agent.service.ranking.text_search", lambda _collection, _query, limit=10: {}
     )
+    monkeypatch.setattr(api, "MongoService", FakeMongoService)
+
+    class DummyResponse:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"version": "test"}
+
+    class DummyAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, _path: str):
+            return DummyResponse()
+
+    monkeypatch.setattr(api.httpx, "AsyncClient", DummyAsyncClient)
 
     client = TestClient(api.app)
     yield client

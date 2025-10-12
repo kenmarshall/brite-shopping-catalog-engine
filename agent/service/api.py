@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from bson import ObjectId
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
+from pymongo.errors import PyMongoError
 
 from agent.config.settings import Settings, get_settings
 from agent.db.mongo import MongoService
@@ -18,6 +20,36 @@ from agent.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 app = FastAPI(title="Brite Shopping Agent")
+
+
+@app.on_event("startup")
+async def startup_checks() -> None:
+    settings = get_settings()
+
+    # MongoDB connectivity check
+    try:
+        mongo = MongoService()
+        mongo.client.admin.command("ping")
+        LOGGER.info("MongoDB connection successful")
+    except Exception as exc:  # pragma: no cover - environment dependent
+        LOGGER.error("MongoDB connection failed: %s", exc)
+    else:
+        mongo.client.close()
+
+    # Ollama connectivity check
+    try:
+        async with httpx.AsyncClient(
+            base_url=str(settings.ollama.base_url),
+            timeout=5.0,
+        ) as client:
+            response = await client.get("/api/version")
+            response.raise_for_status()
+            payload = response.json()
+        LOGGER.info(
+            "Ollama connection successful",
+        )
+    except Exception as exc:  # pragma: no cover - environment dependent
+        LOGGER.error("Ollama connection failed: %s", exc)
 
 
 def get_mongo() -> MongoService:
@@ -57,7 +89,14 @@ def health() -> dict[str, str]:
 def scrape_start(payload: ScrapeRequest) -> dict[str, Any]:
     if not payload.store_id and not payload.url:
         raise HTTPException(status_code=400, detail="store_id or url required")
-    job = run_scrape(store_id=payload.store_id, url=payload.url, use_playwright=False)
+    try:
+        job = run_scrape(store_id=payload.store_id, url=payload.url, use_playwright=False)
+    except PyMongoError as exc:
+        LOGGER.error("Scrape failed due to MongoDB error: %s", exc)
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    except RuntimeError as exc:
+        LOGGER.error("Scrape failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return job
 
 

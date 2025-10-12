@@ -11,6 +11,18 @@ from agent.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 
+class EmbeddingError(RuntimeError):
+    """Base class for embedding related failures."""
+
+
+class EmbeddingModelUnavailable(EmbeddingError):
+    """Raised when the configured embedding model is not available on the Ollama server."""
+
+
+class EmbeddingResponseError(EmbeddingError):
+    """Raised when the Ollama server returns an invalid embedding payload."""
+
+
 class OllamaClient:
     def __init__(self, base_url: str | None = None, model: str | None = None) -> None:
         settings = get_settings().ollama
@@ -22,12 +34,28 @@ class OllamaClient:
         payload = {"model": self.model, "input": list(texts)}
         LOGGER.debug("Embedding %d texts", len(texts))
         response = await self._client.post("/api/embeddings", json=payload)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                detail = "embedding model not found"
+                try:
+                    detail_json = exc.response.json()
+                    detail = detail_json.get("error", detail)
+                except Exception:  # pragma: no cover - non-json response
+                    detail = exc.response.text or detail
+                raise EmbeddingModelUnavailable(detail) from exc
+            raise
         data = response.json()
         embeddings = data.get("data", [])
         if isinstance(embeddings, dict) and "embedding" in embeddings:
-            return [embeddings["embedding"]]
-        return [item["embedding"] for item in embeddings]
+            embeddings = [embeddings["embedding"]]
+        else:
+            embeddings = [item["embedding"] for item in embeddings]
+
+        if not embeddings or not embeddings[0]:
+            raise EmbeddingResponseError("empty embedding payload from Ollama")
+        return embeddings
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -42,7 +70,27 @@ async def embed_texts(texts: Sequence[str]) -> list[list[float]]:
 
 
 def embed_sync(texts: Sequence[str]) -> list[list[float]]:
-    return asyncio.get_event_loop().run_until_complete(embed_texts(texts))
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(embed_texts(texts))
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+    if loop.is_running():
+        future = asyncio.run_coroutine_threadsafe(embed_texts(texts), loop)
+        return future.result()
+    return loop.run_until_complete(embed_texts(texts))
 
 
-__all__ = ["OllamaClient", "embed_texts", "embed_sync"]
+__all__ = [
+    "EmbeddingError",
+    "EmbeddingModelUnavailable",
+    "EmbeddingResponseError",
+    "OllamaClient",
+    "embed_texts",
+    "embed_sync",
+]

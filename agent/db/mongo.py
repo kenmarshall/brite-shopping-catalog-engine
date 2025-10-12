@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+try:
+    import certifi
+except ImportError:  # pragma: no cover
+    certifi = None  # type: ignore[assignment]
 from bson import ObjectId
 from pymongo import ASCENDING, MongoClient
 
@@ -15,7 +19,15 @@ LOGGER = get_logger(__name__)
 class MongoService:
     def __init__(self, client: MongoClient | None = None) -> None:
         settings = get_settings().mongo
-        self.client = client or MongoClient(settings.uri)
+        client_kwargs: dict[str, Any] = {"serverSelectionTimeoutMS": 5000}
+        if certifi is not None:
+            try:
+                client_kwargs["tlsCAFile"] = certifi.where()
+            except Exception as exc:  # pragma: no cover
+                LOGGER.debug("Unable to locate CA bundle via certifi: %s", exc)
+        else:  # pragma: no cover - certifi should be installed with httpx
+            LOGGER.debug("certifi not available; using default TLS configuration")
+        self.client = client or MongoClient(settings.uri, **client_kwargs)
         self.db = self.client[settings.db]
         self.products = self.db[settings.collection_products]
         self.stores = self.db[settings.collection_stores]

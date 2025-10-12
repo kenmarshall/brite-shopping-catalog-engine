@@ -22,6 +22,7 @@ class MongoSettings(BaseSettings):
 class OllamaSettings(BaseSettings):
     base_url: HttpUrl = Field("http://localhost:11434", alias="OLLAMA_BASE_URL")
     embed_model: str = Field("nomic-embed-text", alias="OLLAMA_EMBED_MODEL")
+    tag_model: str | None = Field(None, alias="OLLAMA_TAG_MODEL")
 
     model_config = SettingsConfigDict(
         env_file=Path(".env"),
@@ -43,9 +44,11 @@ class ScraperSettings(BaseSettings):
 
 
 class Settings(BaseSettings):
-    mongo: MongoSettings = MongoSettings()
-    ollama: OllamaSettings = OllamaSettings()
-    scraper: ScraperSettings = ScraperSettings()
+    # Pylance does not understand that BaseSettings pulls values from env vars.
+    # type: ignore[call-arg]
+    mongo: MongoSettings = Field(default_factory=MongoSettings)  # type: ignore[call-arg]
+    ollama: OllamaSettings = Field(default_factory=OllamaSettings)  # type: ignore[call-arg]
+    scraper: ScraperSettings = Field(default_factory=ScraperSettings)  # type: ignore[call-arg]
     stores_config_path: Path = Path("agent/config/stores.yml")
     data_dir: Path = Path("data")
     faiss_index_path: Path = data_dir / "faiss.index"
