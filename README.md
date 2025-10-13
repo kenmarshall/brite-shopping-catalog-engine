@@ -25,7 +25,7 @@ make dev  # http://localhost:8000/docs
 > virtual environment (such as `.venv`) keeps those dependencies isolated from your global Python installation, which avoids
 > version conflicts across projects.
 
-Launch a demo scrape (uses configuration from `agent/config/stores.yml`):
+Launch a demo scrape (uses configuration from `agent/config/sources.yml`):
 
 ```bash
 make scrape
@@ -75,7 +75,7 @@ Settings are managed via [`pydantic-settings`](https://docs.pydantic.dev/latest/
 
 ## Adding a New Store
 
-1. Duplicate the schema in `agent/config/stores.yml`.
+1. Duplicate the schema in `agent/config/sources.yml`.
 2. Supply navigation paths and CSS selectors.
 3. Provide authentication strategy details (if needed).
 4. Run `python -m agent scrape --store-id=<store>`.

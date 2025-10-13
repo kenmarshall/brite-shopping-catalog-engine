@@ -1,14 +1,20 @@
-- store_id: "grace-foods"
-  store_name: "Grace Foods"
+- source_id: "grace"
+  entity_type: "brand"
+  brand:
+    name: "Grace"
+  catalog_name: "Grace Foods"
   base_url: "https://gracefoods.com"
+  defaults:
+    brand: "Grace"
   auth:
     strategy: none
-    storage_state_path: "./data/sessions/grace-foods.json"
+    storage_state_path: "./data/sessions/grace.json"
   navigation:
     start_paths:
       - "https://gracefoods.com/products"
     pagination:
       next_selector: ".noo_pagination li:not(.disabled) > a[title='Next']"
+      max_pages: null
   selectors:
     product: ".noo_product"
     name: ".jshop_information .name"

@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 import yaml
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 from agent.config.settings import get_settings
 from agent.db import models
@@ -19,18 +21,18 @@ from agent.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 
-def load_store_configs(path: Path) -> list[dict[str, Any]]:
+def load_source_configs(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or []
 
 
-def get_store_config(store_id: str) -> dict[str, Any]:
+def get_source_config(source_id: str) -> dict[str, Any]:
     settings = get_settings()
-    configs = load_store_configs(settings.stores_config_path)
+    configs = load_source_configs(settings.sources_config_path)
     for config in configs:
-        if config["store_id"] == store_id:
+        if config.get("source_id") == source_id:
             return config
-    raise ValueError(f"Store config not found for {store_id}")
+    raise ValueError(f"Source config not found for {source_id}")
 
 
 async def fetch_category(url: str, use_playwright: bool = True) -> str:
@@ -42,8 +44,31 @@ async def fetch_category(url: str, use_playwright: bool = True) -> str:
         return response.text
 
 
+def _next_page_url(
+    html: str,
+    navigation: dict[str, Any],
+    current_url: str,
+    base_url: str,
+) -> str | None:
+    pagination = navigation.get("pagination", {})
+    selector = pagination.get("next_selector")
+    if not selector:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    next_el = soup.select_one(selector)
+    if not next_el:
+        return None
+    href = next_el.get("href")
+    if not href:
+        return None
+    resolved = urljoin(base_url, href)
+    if resolved == current_url:
+        return None
+    return resolved
+
+
 async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[str, Any] | None:
-    config = get_store_config(store_id)
+    config = get_source_config(store_id)
     job = models.ScrapeJob(store_id=store_id, status="running")
     mongo = MongoService()
     job_id = mongo.create_job(job)
@@ -51,23 +76,53 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
 
     try:
         selectors = config.get("selectors", {})
-        store_name = config.get("store_name", store_id)
+        catalog_id, catalog_name = resolve_catalog_identity(config, store_id)
+        defaults = config.get("defaults", {})
+        default_brand = defaults.get("brand")
+        if not default_brand and config.get("entity_type") == "brand":
+            brand_cfg = config.get("brand", {})
+            default_brand = brand_cfg.get("name")
         start_paths = config.get("navigation", {}).get("start_paths", [])
+        navigation = config.get("navigation", {})
+        base_url = config.get("base_url", "")
+        pagination = navigation.get("pagination", {})
+        max_pages = pagination.get("max_pages")
         for url in start_paths:
-            LOGGER.info("Scraping %s", url)
-            html = await fetch_category(url, use_playwright=use_playwright)
-            raw_products = parsers.parse_products(html, selectors, config.get("base_url", url))
-            stats.seen += len(raw_products)
-            for raw in raw_products:
-                product = parsers.raw_to_product(raw, store_id=store_id, store_name=store_name)
-                product.updated_at = datetime.utcnow()
-                product.created_at = datetime.utcnow()
-                product = await enrich_product(product)
-                _, created = mongo.upsert_product(product)
-                if created:
-                    stats.saved += 1
-                else:
-                    stats.updated += 1
+            next_url = url
+            visited: set[str] = set()
+            page_count = 0
+            while next_url and next_url not in visited:
+                visited.add(next_url)
+                page_count += 1
+                LOGGER.info("Scraping %s", next_url)
+                html = await fetch_category(next_url, use_playwright=use_playwright)
+                raw_products = parsers.parse_products(html, selectors, base_url or next_url)
+                stats.seen += len(raw_products)
+                for raw in raw_products:
+                    product = parsers.raw_to_product(
+                        raw,
+                        store_id=catalog_id,
+                        store_name=catalog_name,
+                        default_brand=default_brand,
+                    )
+                    product.updated_at = datetime.utcnow()
+                    product.created_at = datetime.utcnow()
+                    product = await enrich_product(product)
+                    _, created = mongo.upsert_product(product)
+                    if created:
+                        stats.saved += 1
+                    else:
+                        stats.updated += 1
+                if max_pages and page_count >= max_pages:
+                    break
+                next_url = _next_page_url(
+                    html,
+                    navigation,
+                    next_url,
+                    base_url or next_url,
+                )
+                if next_url and next_url in visited:
+                    break
         mongo.update_job(
             job_id,
             {"status": "done", "stats": stats.model_dump(), "finished_at": datetime.utcnow()},
@@ -84,10 +139,17 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
 async def scrape_url(
     url: str, store_id: str | None = None, *, use_playwright: bool = True
 ) -> dict[str, Any] | None:
-    config = get_store_config(store_id) if store_id else None
+    config = get_source_config(store_id) if store_id else None
     selectors = config.get("selectors", {}) if config else {"product": ".product"}
-    store_name = config.get("store_name", store_id or "external") if config else "external"
+    catalog_id, catalog_name = (
+        resolve_catalog_identity(config, store_id or "external") if config else (store_id or "external", "external")
+    )
     base_url = config.get("base_url", url) if config else url
+    defaults = config.get("defaults", {}) if config else {}
+    default_brand = defaults.get("brand") if defaults else None
+    if not default_brand and config and config.get("entity_type") == "brand":
+        brand_cfg = config.get("brand", {})
+        default_brand = brand_cfg.get("name")
     mongo = MongoService()
     job = models.ScrapeJob(store_id=store_id, seed_url=url, status="running")
     job_id = mongo.create_job(job)
@@ -98,7 +160,10 @@ async def scrape_url(
         stats.seen = len(raw_products)
         for raw in raw_products:
             product = parsers.raw_to_product(
-                raw, store_id=store_id or "external", store_name=store_name
+                raw,
+                store_id=catalog_id,
+                store_name=catalog_name,
+                default_brand=default_brand,
             )
             product = await enrich_product(product)
             _, created = mongo.upsert_product(product)
@@ -149,9 +214,28 @@ def run_scrape(
 
 
 __all__ = [
-    "load_store_configs",
-    "get_store_config",
+    "load_source_configs",
+    "get_source_config",
     "scrape_store",
     "scrape_url",
     "run_scrape",
 ]
+def resolve_catalog_identity(config: dict[str, Any], fallback_id: str) -> tuple[str, str]:
+    entity_type = (config.get("entity_type") or "store").lower()
+    source_name = config.get("catalog_name")
+
+    if entity_type == "brand":
+        brand_cfg = config.get("brand", {})
+        catalog_id = (
+            brand_cfg.get("id")
+            or brand_cfg.get("slug")
+            or (brand_cfg.get("name") or "").lower().replace(" ", "-")
+            or fallback_id
+        )
+        catalog_name = brand_cfg.get("name") or source_name or catalog_id
+    else:
+        store_cfg = config.get("store", {})
+        catalog_id = store_cfg.get("id") or fallback_id
+        catalog_name = store_cfg.get("name") or source_name or catalog_id
+
+    return catalog_id, catalog_name

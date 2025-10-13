@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     mongo: MongoSettings = Field(default_factory=MongoSettings)  # type: ignore[call-arg]
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)  # type: ignore[call-arg]
     scraper: ScraperSettings = Field(default_factory=ScraperSettings)  # type: ignore[call-arg]
-    stores_config_path: Path = Path("agent/config/stores.yml")
+    sources_config_path: Path = Path("agent/config/sources.yml")
     data_dir: Path = Path("data")
     faiss_index_path: Path = data_dir / "faiss.index"
     faiss_meta_path: Path = data_dir / "faiss_meta.json"

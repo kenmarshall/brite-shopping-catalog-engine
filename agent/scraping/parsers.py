@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -67,9 +68,13 @@ def parse_products(html: str, selectors: dict, base_url: str) -> list[RawProduct
             el.select_one(category_selector).get_text(strip=True) if category_selector else None
         )
         link = el.find("a", href=True)
-        url = link["href"] if link else base_url
+        href = link["href"] if link else None
+        url = urljoin(base_url, href) if href else base_url
 
         price = parse_price(price_text) if price_text else None
+        if image_url and not image_url.startswith("http"):
+            image_url = urljoin(base_url, image_url)
+
         results.append(
             RawProduct(
                 name=name,
@@ -85,9 +90,16 @@ def parse_products(html: str, selectors: dict, base_url: str) -> list[RawProduct
     return results
 
 
-def raw_to_product(raw: RawProduct, store_id: str, store_name: str) -> Product:
+def raw_to_product(
+    raw: RawProduct,
+    store_id: str,
+    store_name: str,
+    default_brand: str | None = None,
+) -> Product:
     normalized_name = normalize_name(raw.name)
     brand = normalize_brand(raw.brand_hint)
+    if not brand and default_brand:
+        brand = default_brand
     category = normalize_category(raw.category_hint)
     size = parse_size(raw.size_hint or raw.name)
     checksum = build_checksum(

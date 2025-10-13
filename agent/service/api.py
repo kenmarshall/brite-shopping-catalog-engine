@@ -97,7 +97,7 @@ def scrape_start(payload: ScrapeRequest) -> dict[str, Any]:
     except RuntimeError as exc:
         LOGGER.error("Scrape failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return job
+    return job # type: ignore
 
 
 @app.get("/scrape/jobs/{job_id}")
