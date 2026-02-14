@@ -38,7 +38,7 @@ def get_source_config(source_id: str) -> dict[str, Any]:
 async def fetch_category(url: str, use_playwright: bool = True) -> str:
     if use_playwright:
         return await fetch_html(url)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
         response = await client.get(url)
         response.raise_for_status()
         return response.text
@@ -82,6 +82,7 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
         if not default_brand and config.get("entity_type") == "brand":
             brand_cfg = config.get("brand", {})
             default_brand = brand_cfg.get("name")
+        currency = defaults.get("currency", "JMD")
         start_paths = config.get("navigation", {}).get("start_paths", [])
         navigation = config.get("navigation", {})
         base_url = config.get("base_url", "")
@@ -96,7 +97,7 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
                 page_count += 1
                 LOGGER.info("Scraping %s", next_url)
                 html = await fetch_category(next_url, use_playwright=use_playwright)
-                raw_products = parsers.parse_products(html, selectors, base_url or next_url)
+                raw_products = parsers.parse_products(html, selectors, base_url or next_url, currency=currency)
                 stats.seen += len(raw_products)
                 for raw in raw_products:
                     product = parsers.raw_to_product(
@@ -147,6 +148,7 @@ async def scrape_url(
     base_url = config.get("base_url", url) if config else url
     defaults = config.get("defaults", {}) if config else {}
     default_brand = defaults.get("brand") if defaults else None
+    currency = defaults.get("currency", "JMD") if defaults else "JMD"
     if not default_brand and config and config.get("entity_type") == "brand":
         brand_cfg = config.get("brand", {})
         default_brand = brand_cfg.get("name")
@@ -156,7 +158,7 @@ async def scrape_url(
     stats = job.stats
     try:
         html = await fetch_category(url, use_playwright=use_playwright)
-        raw_products = parsers.parse_products(html, selectors, base_url)
+        raw_products = parsers.parse_products(html, selectors, base_url, currency=currency)
         stats.seen = len(raw_products)
         for raw in raw_products:
             product = parsers.raw_to_product(

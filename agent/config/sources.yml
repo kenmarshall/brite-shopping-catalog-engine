@@ -36,6 +36,7 @@
   base_url: "https://www.shopsampars.com"
   defaults:
     brand: null
+    currency: "USD"
   auth:
     strategy: none
     storage_state_path: "./data/sessions/sampars.json"

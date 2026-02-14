@@ -30,7 +30,7 @@ class RawProduct:
     url: str
 
 
-def parse_products(html: str, selectors: dict, base_url: str) -> list[RawProduct]:
+def parse_products(html: str, selectors: dict, base_url: str, currency: str = "JMD") -> list[RawProduct]:
     soup = BeautifulSoup(html, "html.parser")
     product_selector = selectors.get("product")
     elements = (
@@ -80,7 +80,7 @@ def parse_products(html: str, selectors: dict, base_url: str) -> list[RawProduct
             RawProduct(
                 name=name,
                 price=price,
-                currency="JMD",
+                currency=currency,
                 image_url=image_url,
                 size_hint=size_hint,
                 brand_hint=brand_hint,
