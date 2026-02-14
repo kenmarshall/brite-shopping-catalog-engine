@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from agent.db.models import Product
 from agent.scraping.normalizer import (
     build_checksum,
+    build_match_key,
     normalize_brand,
     normalize_category,
     normalize_name,
@@ -105,6 +106,9 @@ def raw_to_product(
     checksum = build_checksum(
         store_id=store_id, normalized_name=normalized_name, brand=brand, size=size
     )
+    match_key = build_match_key(
+        normalized_name=normalized_name, brand=brand, size=size
+    )
     tags: list[str] = []
     if category:
         tags.append(category.lower())
@@ -120,16 +124,19 @@ def raw_to_product(
         url=raw.url,
         image_url=raw.image_url,
         checksum=checksum,
+        match_key=match_key,
         location_prices=[],
     )
     if raw.price is not None:
         product.location_prices.append(
             {
-                "location_id": "default",
+                "location_id": store_id,
+                "store_name": store_name,
                 "amount": raw.price,
                 "currency": raw.currency,
             }
         )
+        product.estimated_price = raw.price
     return product
 
 

@@ -69,6 +69,21 @@ def build_checksum(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def build_match_key(
+    normalized_name: str, brand: str | None, size: SizeInfo
+) -> str:
+    """Cross-store product identity — same product from different stores shares a match_key."""
+    payload = "|".join(
+        [
+            normalized_name,
+            brand or "",
+            f"{size.value or ''}",
+            size.unit or "",
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 __all__ = [
     "normalize_name",
     "normalize_brand",
@@ -76,4 +91,5 @@ __all__ = [
     "parse_price",
     "parse_size",
     "build_checksum",
+    "build_match_key",
 ]

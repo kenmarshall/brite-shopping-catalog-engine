@@ -27,3 +27,63 @@
   rate_limits:
     rpm: 30
     concurrency: 2
+
+- source_id: "sampars"
+  entity_type: "store"
+  store:
+    name: "Sampars"
+  catalog_name: "ShopSampars"
+  base_url: "https://www.shopsampars.com"
+  defaults:
+    brand: null
+  auth:
+    strategy: none
+    storage_state_path: "./data/sessions/sampars.json"
+  navigation:
+    start_paths:
+      - "https://www.shopsampars.com/shop/"
+    pagination:
+      next_selector: "a.next.page-numbers"
+      max_pages: null
+  selectors:
+    product: ".products .product"
+    name: ".wd-entities-title"
+    price: ".woocommerce-Price-amount"
+    image: "img::attr(data-lazy-src)"
+    size_hint: ".wd-entities-title"
+    brand_hint: null
+    category_hint: ".wd-product-cats"
+    location_hint: null
+  rate_limits:
+    rpm: 20
+    concurrency: 2
+
+- source_id: "storetodoor"
+  entity_type: "store"
+  store:
+    name: "Store To Door"
+  catalog_name: "Store To Door Jamaica"
+  base_url: "https://storetodoorja.com"
+  defaults:
+    brand: null
+  auth:
+    strategy: none
+    storage_state_path: "./data/sessions/storetodoor.json"
+  navigation:
+    start_paths:
+      - "https://storetodoorja.com/shop/"
+    pagination:
+      next_selector: "a.next.page-numbers"
+      max_pages: null
+  selectors:
+    product: ".products .product"
+    name: "h3"
+    price: ".woocommerce-Price-amount"
+    image: "img::attr(src)"
+    size_hint: "h3"
+    brand_hint: null
+    category_hint: null
+    location_hint: null
+  rate_limits:
+    rpm: 20
+    concurrency: 2

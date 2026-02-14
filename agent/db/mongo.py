@@ -39,6 +39,7 @@ class MongoService:
             self.products.create_index([("name", "text")], name="product_text")
             self.products.create_index([("tags", ASCENDING)])
             self.products.create_index([("store_id", ASCENDING)])
+            self.products.create_index([("match_key", ASCENDING)])
             self.products.create_index([("location_prices.location_id", ASCENDING)])
             self.stores.create_index([("store_id", ASCENDING)], unique=True)
             self.jobs.create_index([("status", ASCENDING)])
@@ -47,17 +48,58 @@ class MongoService:
             LOGGER.debug("Index creation skipped: %s", exc)
 
     def upsert_product(self, product: models.Product) -> tuple[ObjectId, bool]:
-        query = {
-            "checksum": product.checksum,
-            "store_id": product.store_id,
-        }
-        existing = self.products.find_one(query)
+        new_location_prices = product.location_prices
+
+        # Check for a cross-store match first (same product from a different store)
+        if product.match_key:
+            existing = self.products.find_one({"match_key": product.match_key})
+        else:
+            existing = None
+
+        if existing:
+            # Merge: add new location prices that aren't already present
+            current_prices: list[dict[str, Any]] = existing.get("location_prices", [])
+            existing_location_ids = {lp.get("location_id") for lp in current_prices}
+
+            merged = False
+            for lp in new_location_prices:
+                lp_dict: dict[str, Any] = lp.model_dump() if isinstance(lp, models.LocationPrice) else dict(lp)
+                if lp_dict.get("location_id") not in existing_location_ids:
+                    current_prices.append(lp_dict)
+                    merged = True
+                else:
+                    # Update existing location price
+                    for i, existing_lp in enumerate(current_prices):
+                        if existing_lp.get("location_id") == lp_dict.get("location_id"):
+                            current_prices[i] = lp_dict
+                            break
+
+            # Recompute estimated price as average of all location prices
+            amounts: list[float] = [
+                float(lp["amount"]) for lp in current_prices
+                if lp.get("amount") is not None
+            ]
+            estimated_price = round(sum(amounts) / len(amounts), 2) if amounts else None
+
+            update: dict[str, Any] = {
+                "location_prices": current_prices,
+                "estimated_price": estimated_price,
+                "updated_at": product.updated_at,
+            }
+
+            # If the new product has an embedding and the existing one doesn't, use it
+            if product.embedding and not existing.get("embedding"):
+                update["embedding"] = product.embedding
+            if product.tags and not existing.get("tags"):
+                update["tags"] = product.tags
+
+            self.products.update_one({"_id": existing["_id"]}, {"$set": update})
+            LOGGER.debug("Merged product %s (location: %s)", existing["_id"], product.store_id)
+            return existing["_id"], not merged  # False if we added a new location
+
+        # No cross-store match — insert as new product
         payload = product.model_dump(by_alias=True, exclude_none=True)
         payload["updated_at"] = product.updated_at
-        if existing:
-            self.products.update_one({"_id": existing["_id"]}, {"$set": payload})
-            LOGGER.debug("Updated product %s", existing["_id"])
-            return existing["_id"], False
         result = self.products.insert_one(payload)
         LOGGER.debug("Inserted product %s", result.inserted_id)
         return result.inserted_id, True

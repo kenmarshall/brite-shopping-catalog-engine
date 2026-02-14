@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 class LocationPrice(BaseModel):
     location_id: str
+    store_name: str | None = None
     amount: float
     currency: str = "JMD"
     last_seen_at: datetime = Field(default_factory=datetime.utcnow)
@@ -23,6 +24,7 @@ class Product(BaseModel):
     store_id: str
     store_name: str
     location_prices: list[LocationPrice] = Field(default_factory=list)
+    estimated_price: float | None = None
     name: str
     normalized_name: str
     brand: str | None = None
@@ -36,6 +38,7 @@ class Product(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     checksum: str
+    match_key: str | None = None
 
     class Config:
         populate_by_name = True

@@ -1,4 +1,4 @@
-from __future__ import annotations
+from typing import Optional
 
 import typer
 
@@ -16,8 +16,8 @@ LOGGER = get_logger(__name__)
 
 @app.command()
 def scrape(
-    store_id: str | None = typer.Option(None),
-    url: str | None = typer.Option(None),
+    store_id: Optional[str] = typer.Option(None),
+    url: Optional[str] = typer.Option(None),
     force: bool = typer.Option(False),
 ) -> None:
     job = run_scrape(store_id=store_id, url=url, use_playwright=False)
