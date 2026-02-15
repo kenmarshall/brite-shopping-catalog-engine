@@ -104,6 +104,87 @@ def backfill() -> None:
     typer.echo(f"Backfilled {fixed}/{len(products)} products")
 
 
+@app.command()
+def curate(
+    batch_size: int = typer.Option(50, "--batch-size", help="Products per batch"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing"),
+) -> None:
+    """AI-powered data curation: fix missing/bad categories, detect brand-as-category, etc."""
+    import asyncio
+
+    import httpx
+
+    from agent.config.settings import get_settings
+
+    settings = get_settings().ollama
+
+    async def ask_llm(prompt: str) -> str:
+        async with httpx.AsyncClient(base_url=str(settings.base_url), timeout=60.0) as client:
+            resp = await client.post("/api/generate", json={
+                "model": settings.tag_model,
+                "prompt": prompt,
+                "stream": False,
+            })
+            resp.raise_for_status()
+            return resp.json().get("response", "").strip()
+
+    mongo = MongoService()
+
+    # Find products needing curation: missing category, or comma-separated
+    query = {"$or": [
+        {"category": None},
+        {"category": ""},
+        {"category": {"$regex": ","}},
+    ]}
+    products = list(mongo.products.find(query).limit(batch_size))
+    typer.echo(f"Found {len(products)} products to curate")
+
+    if not products:
+        return
+
+    fixed = 0
+    for doc in products:
+        name = doc.get("name", "")
+        brand = doc.get("brand", "")
+        old_cat = doc.get("category", "")
+        tags = doc.get("tags", [])
+
+        prompt = (
+            "You are a Jamaican grocery store category assistant. "
+            "Given a product name, brand, and existing tags, return the SINGLE best "
+            "grocery category for this product. Use standard grocery categories like: "
+            "Snacks, Dairy & Non-Dairy, Frozen Foods, Canned & Packaged, Beverages, "
+            "Condiments & Sauces, Cereal & Breakfast, Rice, Pasta & Soups, Bakery, "
+            "Meats, Seafood, Produce, Spices, Personal Care, Hair Care, Skin Care, "
+            "Baby & Infant, Cleaning Chemicals, Laundry Centre, Medicine, Pet Care, "
+            "Household, Paper & Plastics, Hot Beverages, Fats & Oil.\n"
+            "Respond with ONLY the category name, nothing else.\n\n"
+            f"Product: {name}\n"
+            f"Brand: {brand or 'Unknown'}\n"
+            f"Current category: {old_cat or 'None'}\n"
+            f"Tags: {', '.join(tags) if tags else 'None'}\n"
+        )
+
+        try:
+            new_cat = asyncio.run(ask_llm(prompt))
+            new_cat = new_cat.split("\n")[0].strip().strip('"').strip("'").title()
+        except Exception as e:
+            LOGGER.warning("LLM failed for %s: %s", name, e)
+            continue
+
+        if not new_cat or len(new_cat) > 40:
+            continue
+
+        if dry_run:
+            typer.echo(f"  {name[:50]:50s} | {old_cat or 'None':25s} -> {new_cat}")
+        else:
+            mongo.products.update_one({"_id": doc["_id"]}, {"$set": {"category": new_cat}})
+            LOGGER.info("Fixed category: %s -> %s for %s", old_cat, new_cat, name)
+        fixed += 1
+
+    typer.echo(f"{'Would fix' if dry_run else 'Fixed'} {fixed}/{len(products)} products")
+
+
 def main() -> None:
     app()
 
