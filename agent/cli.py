@@ -2,12 +2,18 @@ from typing import Optional
 
 import typer
 
-from agent.db.models import Product, SizeInfo
+from agent.db.models import LocationPrice, Product, SizeInfo
 from agent.db.mongo import MongoService
 from agent.embeddings.faiss_index import FaissIndex
 from agent.embeddings.featurizer import build_embedding_text
 from agent.embeddings.ollama_client import embed_sync
-from agent.scraping.normalizer import build_match_key, normalize_name, parse_size
+from agent.scraping.normalizer import (
+    build_checksum,
+    build_match_key,
+    normalize_name,
+    parse_price,
+    parse_size,
+)
 from agent.scraping.pipeline import run_scrape
 from agent.utils.logging import get_logger
 
@@ -183,6 +189,282 @@ def curate(
         fixed += 1
 
     typer.echo(f"{'Would fix' if dry_run else 'Fixed'} {fixed}/{len(products)} products")
+
+
+@app.command(name="add-price")
+def add_price(
+    store_id: str = typer.Option(..., "--store-id", help="Store identifier (e.g. hilo, pricesmart)"),
+    store_name: str = typer.Option(..., "--store-name", help="Display name (e.g. 'Hi-Lo Half Way Tree')"),
+    name: str = typer.Option(..., "--name", help="Product name"),
+    price: float = typer.Option(..., "--price", help="Price amount"),
+    currency: str = typer.Option("JMD", "--currency", help="Currency code"),
+    brand: Optional[str] = typer.Option(None, "--brand"),
+    category: Optional[str] = typer.Option(None, "--category"),
+) -> None:
+    """Manually add a product price for stores without web scraping (MegaMart, Progressive, etc.)."""
+    from datetime import datetime
+
+    from agent.scraping.normalizer import normalize_brand, normalize_category
+
+    mongo = MongoService()
+    normalized = normalize_name(name)
+    size = parse_size(name)
+    norm_brand = normalize_brand(brand)
+    norm_category = normalize_category(category)
+    match_key = build_match_key(normalized, norm_brand, size)
+    checksum = build_checksum(store_id, normalized, norm_brand, size)
+
+    location_price = {
+        "location_id": store_id,
+        "store_name": store_name,
+        "amount": price,
+        "currency": currency,
+        "last_seen_at": datetime.utcnow(),
+    }
+
+    # Try to merge with existing product via match_key
+    existing = mongo.products.find_one({"match_key": match_key})
+    if existing:
+        current_prices = existing.get("location_prices", [])
+        # Update or add this store's price
+        updated = False
+        for i, lp in enumerate(current_prices):
+            if lp.get("location_id") == store_id:
+                current_prices[i] = location_price
+                updated = True
+                break
+        if not updated:
+            current_prices.append(location_price)
+
+        amounts = [float(lp["amount"]) for lp in current_prices if lp.get("amount") is not None]
+        estimated = round(sum(amounts) / len(amounts), 2) if amounts else None
+
+        mongo.products.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {
+                "location_prices": current_prices,
+                "estimated_price": estimated,
+                "updated_at": datetime.utcnow(),
+            }},
+        )
+        typer.echo(f"Updated existing product: {existing.get('name')} (added {store_name} @ ${price})")
+    else:
+        product = Product(
+            store_id=store_id,
+            store_name=store_name,
+            name=name,
+            normalized_name=normalized,
+            brand=norm_brand,
+            size=size,
+            category=norm_category,
+            url=f"manual://{store_id}",
+            checksum=checksum,
+            match_key=match_key,
+            location_prices=[
+                LocationPrice(
+                    location_id=store_id,
+                    store_name=store_name,
+                    amount=price,
+                    currency=currency,
+                )
+            ],
+            estimated_price=price,
+        )
+        oid, _ = mongo.upsert_product(product)
+        typer.echo(f"Created new product: {name} @ {store_name} ${price} (id: {oid})")
+
+
+@app.command(name="parse-receipt")
+def parse_receipt(
+    image_path: str = typer.Argument(..., help="Path to receipt image"),
+    store_id: str = typer.Option(..., "--store-id", help="Store identifier"),
+    store_name: str = typer.Option(..., "--store-name", help="Store display name"),
+    currency: str = typer.Option("JMD", "--currency"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview parsed items without saving"),
+) -> None:
+    """Parse a grocery receipt image using Ollama vision model and add prices to the database."""
+    import asyncio
+    import base64
+    import json
+    from pathlib import Path
+
+    import httpx
+
+    from agent.config.settings import get_settings
+
+    receipt_path = Path(image_path)
+    if not receipt_path.exists():
+        typer.echo(f"Error: File not found: {image_path}", err=True)
+        raise typer.Exit(1)
+
+    # Read and encode image
+    image_bytes = receipt_path.read_bytes()
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    settings = get_settings().ollama
+
+    async def call_vision(prompt: str, image: str) -> str:
+        async with httpx.AsyncClient(base_url=str(settings.base_url), timeout=120.0) as client:
+            resp = await client.post("/api/generate", json={
+                "model": settings.vision_model,
+                "prompt": prompt,
+                "images": [image],
+                "stream": False,
+            })
+            resp.raise_for_status()
+            return resp.json().get("response", "").strip()
+
+    prompt = (
+        "You are analyzing a grocery store receipt image. "
+        "Extract ALL product line items with their names and prices. "
+        "Return ONLY a JSON array where each element has:\n"
+        '  {"name": "product name", "price": 123.45}\n'
+        "Rules:\n"
+        "- Use the exact product name as printed on the receipt\n"
+        "- Price should be a number (no currency symbol)\n"
+        "- Skip subtotals, tax lines, totals, and non-product entries\n"
+        "- Skip discounts or negative amounts\n"
+        "Return ONLY the JSON array, no other text."
+    )
+
+    typer.echo(f"Parsing receipt: {receipt_path.name} (model: {settings.vision_model})")
+    try:
+        result = asyncio.run(call_vision(prompt, image_b64))
+    except Exception as e:
+        typer.echo(f"Vision model error: {e}", err=True)
+        raise typer.Exit(1)
+
+    # Parse JSON from response (handle markdown fences)
+    cleaned = result.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
+
+    try:
+        items = json.loads(cleaned)
+    except json.JSONDecodeError:
+        typer.echo(f"Could not parse LLM response as JSON:\n{result}", err=True)
+        raise typer.Exit(1)
+
+    if not isinstance(items, list):
+        typer.echo(f"Expected JSON array, got: {type(items).__name__}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Found {len(items)} items on receipt")
+
+    saved = 0
+    for item in items:
+        item_name = item.get("name", "").strip()
+        item_price = item.get("price")
+        if not item_name or item_price is None:
+            continue
+        try:
+            item_price = float(item_price)
+        except (TypeError, ValueError):
+            continue
+        if item_price <= 0:
+            continue
+
+        if dry_run:
+            typer.echo(f"  {item_name:50s} ${item_price:.2f}")
+        else:
+            # Use the add-price logic inline
+            from datetime import datetime
+
+            from agent.scraping.normalizer import normalize_brand, normalize_category
+
+            normalized = normalize_name(item_name)
+            size = parse_size(item_name)
+            match_key = build_match_key(normalized, None, size)
+            checksum = build_checksum(store_id, normalized, None, size)
+
+            product = Product(
+                store_id=store_id,
+                store_name=store_name,
+                name=item_name,
+                normalized_name=normalized,
+                size=size,
+                url=f"receipt://{store_id}/{receipt_path.stem}",
+                checksum=checksum,
+                match_key=match_key,
+                location_prices=[
+                    LocationPrice(
+                        location_id=store_id,
+                        store_name=store_name,
+                        amount=item_price,
+                        currency=currency,
+                    )
+                ],
+                estimated_price=item_price,
+            )
+            mongo = MongoService()
+            mongo.upsert_product(product)
+        saved += 1
+
+    typer.echo(f"{'Would save' if dry_run else 'Saved'} {saved}/{len(items)} items from receipt")
+
+
+@app.command(name="login-session")
+def login_session(
+    store_id: str = typer.Option(..., "--store-id", help="Store to create a session for"),
+) -> None:
+    """Open a browser for manual login, then save the session for automated scraping.
+
+    Use this for auth-gated stores like PriceSmart or Hi-Lo. You log in manually,
+    and the session cookies are saved for subsequent scrape runs.
+    """
+    import yaml
+
+    from agent.config.settings import get_settings
+
+    settings = get_settings()
+    sources_path = settings.sources_config_path
+    with open(sources_path) as f:
+        sources = yaml.safe_load(f)
+
+    source = next((s for s in sources if s["source_id"] == store_id), None)
+    if not source:
+        typer.echo(f"Error: No source config found for '{store_id}'", err=True)
+        raise typer.Exit(1)
+
+    storage_path = source.get("auth", {}).get("storage_state_path")
+    if not storage_path:
+        storage_path = f"./data/sessions/{store_id}.json"
+
+    start_url = source.get("base_url", "https://google.com")
+    nav = source.get("navigation", {})
+    start_paths = nav.get("start_paths", [])
+    if start_paths:
+        start_url = start_paths[0]
+
+    typer.echo(f"Opening browser for {store_id}...")
+    typer.echo(f"Navigate to: {start_url}")
+    typer.echo("Log in manually if needed, then close the browser.")
+    typer.echo(f"Session will be saved to: {storage_path}")
+
+    from pathlib import Path
+
+    from playwright.sync_api import sync_playwright
+
+    Path(storage_path).parent.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(start_url)
+
+        typer.echo("\n--- Browser is open. Log in and browse, then CLOSE the browser window. ---\n")
+
+        try:
+            page.wait_for_event("close", timeout=0)
+        except Exception:
+            pass
+
+        context.storage_state(path=storage_path)
+        browser.close()
+
+    typer.echo(f"Session saved to {storage_path}")
+    typer.echo(f"You can now run: python -m agent.cli scrape --store-id {store_id}")
 
 
 def main() -> None:

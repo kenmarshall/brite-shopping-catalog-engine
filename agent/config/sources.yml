@@ -97,6 +97,7 @@
   base_url: "https://www.coolmarket.com"
   defaults:
     brand: null
+    currency: "JMD"
   auth:
     strategy: none
     storage_state_path: "./data/sessions/coolmarket.json"
@@ -127,6 +128,7 @@
   base_url: "https://virtualmartja.com"
   defaults:
     brand: null
+    currency: "JMD"
   auth:
     strategy: playwright
     storage_state_path: "./data/sessions/virtualmart.json"
@@ -148,3 +150,128 @@
   rate_limits:
     rpm: 15
     concurrency: 1
+
+# === Stores requiring session login (use: python -m agent.cli login-session --store-id <id>) ===
+
+- source_id: "hilo"
+  entity_type: "store"
+  store:
+    name: "Hi-Lo"
+  catalog_name: "Hi-Lo Food Stores"
+  base_url: "https://hilofoodstoresja.com"
+  defaults:
+    brand: null
+    currency: "JMD"
+  auth:
+    strategy: playwright
+    storage_state_path: "./data/sessions/hilo.json"
+  navigation:
+    start_paths:
+      - "https://hilofoodstoresja.com/shop/"
+    pagination:
+      next_selector: "a.next.page-numbers"
+      max_pages: null
+  selectors:
+    product: ".products .product"
+    name: ".woocommerce-loop-product__title"
+    price: ".woocommerce-Price-amount"
+    image: "img::attr(src)"
+    size_hint: ".woocommerce-loop-product__title"
+    brand_hint: null
+    category_hint: null
+    location_hint: null
+  rate_limits:
+    rpm: 15
+    concurrency: 1
+
+- source_id: "pricesmart"
+  entity_type: "store"
+  store:
+    name: "PriceSmart"
+  catalog_name: "PriceSmart Jamaica"
+  base_url: "https://www.pricesmart.com"
+  defaults:
+    brand: null
+    currency: "JMD"
+  auth:
+    strategy: playwright
+    storage_state_path: "./data/sessions/pricesmart.json"
+  navigation:
+    start_paths:
+      - "https://www.pricesmart.com/en-jm/category/Groceries/G10D03"
+    pagination:
+      next_selector: null
+      max_pages: null
+  selectors:
+    product: ".product-card"
+    name: ".product-card__name"
+    price: ".product-card__price"
+    image: "img::attr(src)"
+    size_hint: ".product-card__name"
+    brand_hint: null
+    category_hint: null
+    location_hint: null
+  rate_limits:
+    rpm: 10
+    concurrency: 1
+
+- source_id: "loshusan"
+  entity_type: "store"
+  store:
+    name: "Loshusan"
+  catalog_name: "Loshusan Supermarket"
+  base_url: "https://loshusansupermarket.com"
+  defaults:
+    brand: null
+    currency: "USD"
+  auth:
+    strategy: playwright
+    storage_state_path: "./data/sessions/loshusan.json"
+  navigation:
+    start_paths:
+      - "https://loshusansupermarket.com/categories/"
+    pagination:
+      next_selector: null
+      max_pages: null
+  selectors:
+    product: ".product-card"
+    name: ".product-title"
+    price: ".product-price"
+    image: "img::attr(src)"
+    size_hint: ".product-title"
+    brand_hint: null
+    category_hint: null
+    location_hint: null
+  rate_limits:
+    rpm: 10
+    concurrency: 1
+
+# === Manual-only stores (use: python -m agent.cli add-price or parse-receipt) ===
+
+- source_id: "megamart"
+  entity_type: "store"
+  store:
+    name: "MegaMart"
+  catalog_name: "MegaMart Jamaica"
+  base_url: "https://www.megamartja.com"
+  defaults:
+    brand: null
+    currency: "JMD"
+  auth:
+    strategy: none
+  navigation:
+    start_paths: []
+
+- source_id: "progressive"
+  entity_type: "store"
+  store:
+    name: "Progressive"
+  catalog_name: "Progressive Grocers Jamaica"
+  base_url: "https://www.pgj.world"
+  defaults:
+    brand: null
+    currency: "JMD"
+  auth:
+    strategy: none
+  navigation:
+    start_paths: []

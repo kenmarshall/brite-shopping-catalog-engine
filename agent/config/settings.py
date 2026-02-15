@@ -23,6 +23,7 @@ class OllamaSettings(BaseSettings):
     base_url: HttpUrl = Field("http://localhost:11434", alias="OLLAMA_BASE_URL")
     embed_model: str = Field("nomic-embed-text", alias="OLLAMA_EMBED_MODEL")
     tag_model: str | None = Field(None, alias="OLLAMA_TAG_MODEL")
+    vision_model: str = Field("llava", alias="OLLAMA_VISION_MODEL")
 
     model_config = SettingsConfigDict(
         env_file=Path(".env"),
