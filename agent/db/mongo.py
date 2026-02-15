@@ -87,11 +87,17 @@ class MongoService:
                 "updated_at": product.updated_at,
             }
 
-            # If the new product has an embedding and the existing one doesn't, use it
+            # Fill in missing fields from the new source
             if product.embedding and not existing.get("embedding"):
                 update["embedding"] = product.embedding
             if product.tags and not existing.get("tags"):
                 update["tags"] = product.tags
+            if product.brand and not existing.get("brand"):
+                update["brand"] = product.brand
+            if product.category and not existing.get("category"):
+                update["category"] = product.category
+            if product.size and product.size.value and not existing.get("size", {}).get("value"):
+                update["size"] = product.size.model_dump() if hasattr(product.size, "model_dump") else dict(product.size)
             # Use image from whichever source provides a real one
             existing_img = existing.get("image_url") or ""
             new_img = product.image_url or ""
