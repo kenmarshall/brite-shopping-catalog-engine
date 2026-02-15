@@ -3,11 +3,12 @@
 Scraping, normalization, and semantic search service for Jamaican grocery products. Part of the Brite Shopping price comparison platform — helps Jamaican shoppers find products across stores/locations, compare prices, and shop economically.
 
 ## Product Vision
-- Price comparison platform for Jamaican shoppers
+- Price comparison platform for Jamaican shoppers — the goal is to help users make **economical grocery choices** (cheaper brands, bulk/wholesale pricing, cheaper store locations)
 - Products have an **estimated/average price** computed from all location prices
 - Each store location (physical or online) has its own price for a product
 - User flow: search → see product + estimated price → see all store locations + their prices → decide
 - A "store location" can be online as long as Jamaicans can access it
+- The app should let users **infer savings opportunities** from the data — we don't need to be explicit, the comparison logic should make it obvious
 
 ## Architecture
 - **This repo (catalog engine)** runs on the developer's laptop — handles all heavy AI, scraping, and enrichment. Writes to MongoDB.
@@ -48,6 +49,22 @@ WooCommerce stores share common selectors (`.woocommerce-loop-product__title`, `
 - `storetodoor` — Store To Door Jamaica (store, WooCommerce, ~2038 products)
 - `coolmarket` — CoolMarket Jamaica (store, Magento 2, not yet scraped)
 - `virtualmart` — VirtualMart Jamaica (store, WooCommerce/Playwright, not yet scraped)
+- `hilo` — Hi-Lo Food Stores (requires Playwright + login-session, hides prices via CSS)
+- `pricesmart` — PriceSmart (JS SPA, requires Playwright + login-session)
+- `loshusan` — Loshusan Supermarket (returns 403, requires login-session)
+- `megamart` — MegaMart (manual-only, no online catalog)
+- `progressive` — Progressive Grocers (manual-only, no online catalog)
+
+### Data Ingestion Methods
+- **Automated scraping**: Standard CSS selector-based (WooCommerce, Joomla, Magento)
+- **Session-based scraping**: `login-session` command saves Playwright cookies for auth-gated stores
+- **Receipt parsing**: `parse-receipt` command uses Ollama vision model (llava) to extract products/prices from receipt images
+- **Manual entry**: `add-price` command for stores with no web presence
+
+## Future Work
+- **Brand inference**: Brand names are currently hidden in the mobile UI because they're inconsistent across sources. Future: intelligently infer brand from product title, manual entry, or AI curation. Brands enable cross-brand price comparison.
+- **Shopping list sync**: Currently local-only (AsyncStorage with anonymous device profile). Future: optional cloud sync if user demand warrants it.
+- **Unit price comparison**: Normalize prices per unit (e.g., $/kg, $/L) to enable true value comparison across different package sizes.
 
 ## Data Quality Principles
 - All prices are in JMD unless explicitly verified otherwise
