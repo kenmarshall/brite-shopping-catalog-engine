@@ -88,3 +88,63 @@
   rate_limits:
     rpm: 20
     concurrency: 2
+
+- source_id: "coolmarket"
+  entity_type: "store"
+  store:
+    name: "CoolMarket"
+  catalog_name: "CoolMarket Jamaica"
+  base_url: "https://www.coolmarket.com"
+  defaults:
+    brand: null
+  auth:
+    strategy: none
+    storage_state_path: "./data/sessions/coolmarket.json"
+  navigation:
+    start_paths:
+      - "https://www.coolmarket.com/groceries.html"
+    pagination:
+      page_param: "p"
+      max_pages: null
+  selectors:
+    product: ".product-item-info"
+    name: ".product-item-link"
+    price: ".price"
+    image: "img::attr(src)"
+    size_hint: ".product-item-link"
+    brand_hint: null
+    category_hint: null
+    location_hint: null
+  rate_limits:
+    rpm: 20
+    concurrency: 2
+
+- source_id: "virtualmart"
+  entity_type: "store"
+  store:
+    name: "VirtualMart"
+  catalog_name: "VirtualMart Jamaica"
+  base_url: "https://virtualmartja.com"
+  defaults:
+    brand: null
+  auth:
+    strategy: playwright
+    storage_state_path: "./data/sessions/virtualmart.json"
+  navigation:
+    start_paths:
+      - "https://virtualmartja.com/shop/"
+    pagination:
+      next_selector: "a.next.page-numbers"
+      max_pages: null
+  selectors:
+    product: ".products .product"
+    name: ".woocommerce-loop-product__title"
+    price: ".woocommerce-Price-amount"
+    image: "img::attr(src)"
+    size_hint: ".woocommerce-loop-product__title"
+    brand_hint: null
+    category_hint: null
+    location_hint: null
+  rate_limits:
+    rpm: 15
+    concurrency: 1

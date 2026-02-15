@@ -38,7 +38,7 @@ def get_source_config(source_id: str) -> dict[str, Any]:
 async def fetch_category(url: str, use_playwright: bool = True) -> str:
     if use_playwright:
         return await fetch_html(url)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
         response = await client.get(url)
         response.raise_for_status()
         return response.text
@@ -49,22 +49,38 @@ def _next_page_url(
     navigation: dict[str, Any],
     current_url: str,
     base_url: str,
+    page_count: int = 1,
 ) -> str | None:
     pagination = navigation.get("pagination", {})
+
+    # Strategy 1: CSS selector for a "next" link (WooCommerce, etc.)
     selector = pagination.get("next_selector")
-    if not selector:
-        return None
-    soup = BeautifulSoup(html, "html.parser")
-    next_el = soup.select_one(selector)
-    if not next_el:
-        return None
-    href = next_el.get("href")
-    if not href:
-        return None
-    resolved = urljoin(base_url, href)
-    if resolved == current_url:
-        return None
-    return resolved
+    if selector:
+        soup = BeautifulSoup(html, "html.parser")
+        next_el = soup.select_one(selector)
+        if not next_el:
+            return None
+        href = next_el.get("href")
+        if not href:
+            return None
+        resolved = urljoin(base_url, href)
+        if resolved == current_url:
+            return None
+        return resolved
+
+    # Strategy 2: Query-param pagination (Magento ?p=2, etc.)
+    page_param = pagination.get("page_param")
+    if page_param:
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+        parsed = urlparse(current_url)
+        params = parse_qs(parsed.query)
+        next_page = page_count + 1
+        params[page_param] = [str(next_page)]
+        new_query = urlencode(params, doseq=True)
+        return urlunparse(parsed._replace(query=new_query))
+
+    return None
 
 
 async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[str, Any] | None:
@@ -98,6 +114,9 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
                 LOGGER.info("Scraping %s", next_url)
                 html = await fetch_category(next_url, use_playwright=use_playwright)
                 raw_products = parsers.parse_products(html, selectors, base_url or next_url, currency=currency)
+                if not raw_products:
+                    LOGGER.info("No products found on %s — stopping pagination", next_url)
+                    break
                 stats.seen += len(raw_products)
                 for raw in raw_products:
                     product = parsers.raw_to_product(
@@ -121,6 +140,7 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
                     navigation,
                     next_url,
                     base_url or next_url,
+                    page_count=page_count,
                 )
                 if next_url and next_url in visited:
                     break

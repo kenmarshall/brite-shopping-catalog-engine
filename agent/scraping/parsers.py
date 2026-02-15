@@ -40,13 +40,17 @@ def parse_products(html: str, selectors: dict, base_url: str, currency: str = "J
     results: list[RawProduct] = []
     for el in elements:
         name_selector = selectors.get("name")
+        name_el = el.select_one(name_selector) if name_selector else None
         name = (
-            el.select_one(name_selector).get_text(strip=True)
-            if name_selector
+            name_el.get_text(strip=True)
+            if name_el
             else el.get_text(strip=True)
         )
+        if not name:
+            continue
         price_selector = selectors.get("price")
-        price_text = el.select_one(price_selector).get_text(strip=True) if price_selector else None
+        price_el = el.select_one(price_selector) if price_selector else None
+        price_text = price_el.get_text(strip=True) if price_el else None
         image_selector = selectors.get("image")
         image_el = (
             el.select_one(image_selector.split("::attr(")[0])
@@ -61,13 +65,14 @@ def parse_products(html: str, selectors: dict, base_url: str, currency: str = "J
         elif image_el is not None:
             image_url = image_el.get("src")
         size_selector = selectors.get("size_hint")
-        size_hint = el.select_one(size_selector).get_text(strip=True) if size_selector else name
+        size_el = el.select_one(size_selector) if size_selector else None
+        size_hint = size_el.get_text(strip=True) if size_el else name
         brand_selector = selectors.get("brand_hint")
-        brand_hint = el.select_one(brand_selector).get_text(strip=True) if brand_selector else None
+        brand_el = el.select_one(brand_selector) if brand_selector else None
+        brand_hint = brand_el.get_text(strip=True) if brand_el else None
         category_selector = selectors.get("category_hint")
-        category_hint = (
-            el.select_one(category_selector).get_text(strip=True) if category_selector else None
-        )
+        cat_el = el.select_one(category_selector) if category_selector else None
+        category_hint = cat_el.get_text(strip=True) if cat_el else None
         link = el.find("a", href=True)
         href = link["href"] if link else None
         url = urljoin(base_url, href) if href else base_url
