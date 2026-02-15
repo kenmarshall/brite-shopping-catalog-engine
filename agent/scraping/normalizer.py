@@ -26,7 +26,9 @@ def normalize_brand(brand: str | None) -> str | None:
 def normalize_category(category: str | None) -> str | None:
     if not category:
         return None
-    return category.strip().title()
+    # Take the first category if comma-separated (e.g. "Baby & Infant,Medicine" -> "Baby & Infant")
+    first = category.split(",")[0].strip()
+    return first.title() if first else None
 
 
 def parse_price(price_text: str) -> float | None:

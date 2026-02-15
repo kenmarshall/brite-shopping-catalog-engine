@@ -92,6 +92,11 @@ class MongoService:
                 update["embedding"] = product.embedding
             if product.tags and not existing.get("tags"):
                 update["tags"] = product.tags
+            # Use image from whichever source provides a real one
+            existing_img = existing.get("image_url") or ""
+            new_img = product.image_url or ""
+            if new_img and (not existing_img or existing_img.startswith("data:")):
+                update["image_url"] = product.image_url
 
             self.products.update_one({"_id": existing["_id"]}, {"$set": update})
             LOGGER.debug("Merged product %s (location: %s)", existing["_id"], product.store_id)
