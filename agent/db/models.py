@@ -17,6 +17,7 @@ class LocationPrice(BaseModel):
 class SizeInfo(BaseModel):
     value: float | None = None
     unit: str | None = None
+    pack_count: int | None = None
 
 
 class Product(BaseModel):

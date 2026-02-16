@@ -4,6 +4,14 @@
     <a href="/admin/products/{{ p._id }}" class="text-brand hover:underline font-medium">
       {{ p.name[:60] }}{% if p.name|length > 60 %}...{% endif %}
     </a>
+    <div class="mt-1 flex flex-wrap gap-1">
+      {% if p._manual_merge_flag %}
+      <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">merge flagged</span>
+      {% endif %}
+      {% if p._missing_photo %}
+      <span class="inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-medium text-rose-800">missing photo</span>
+      {% endif %}
+    </div>
   </td>
   <td class="px-4 py-3 text-gray-600">{{ p.brand or "—" }}</td>
   <td class="px-4 py-3">
@@ -19,6 +27,15 @@
   </td>
   <td class="px-4 py-3 text-center">
     <a href="/admin/products/{{ p._id }}" class="text-xs text-brand hover:underline mr-2">Edit</a>
+    {% if p._manual_merge_flag %}
+    <form method="post" action="/admin/products/{{ p._id }}/unflag-merge" class="inline">
+      <button type="submit" class="text-xs text-amber-700 hover:underline mr-2">Unflag</button>
+    </form>
+    {% else %}
+    <form method="post" action="/admin/products/{{ p._id }}/flag-merge" class="inline">
+      <button type="submit" class="text-xs text-amber-700 hover:underline mr-2">Flag Merge</button>
+    </form>
+    {% endif %}
     <button
       class="text-xs text-red-500 hover:underline"
       hx-delete="/admin/products/{{ p._id }}"

@@ -16,6 +16,13 @@
   </button>
 </div>
 
+{% if message %}
+<div class="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ error }}</div>
+{% endif %}
+
 <div class="grid grid-cols-1 gap-6 xl:grid-cols-3">
   <div class="xl:col-span-2">
     <form action="/admin/products/{{ product._id }}" method="post" class="space-y-4 rounded-xl bg-white p-5 shadow">
@@ -38,7 +45,7 @@
       <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div>
           <label class="mb-1 block text-sm font-medium text-gray-700">Size Hint (for dedup key)</label>
-          <input name="size_hint" value="{{ product.name or '' }}" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+          <input name="size_hint" value="{{ size_hint }}" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
         </div>
         <div>
           <label class="mb-1 block text-sm font-medium text-gray-700">Estimated Price (JMD)</label>
@@ -71,6 +78,31 @@
 
   <div class="space-y-4">
     <div class="rounded-xl bg-white p-5 shadow">
+      <h3 class="text-sm font-semibold uppercase tracking-wide text-gray-500">Curator Flags</h3>
+      <div class="mt-3 space-y-3">
+        {% if manual_merge_flag %}
+        <div class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Merge flagged</div>
+        <form method="post" action="/admin/products/{{ product._id }}/unflag-merge">
+          <button type="submit" class="rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100">
+            Remove Merge Flag
+          </button>
+        </form>
+        {% if manual_merge_note %}
+        <p class="text-xs text-gray-600">{{ manual_merge_note }}</p>
+        {% endif %}
+        {% else %}
+        <form method="post" action="/admin/products/{{ product._id }}/flag-merge" class="space-y-2">
+          <label class="block text-xs font-medium text-gray-600">Optional note</label>
+          <input name="note" placeholder="Why this might be a duplicate..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+          <button type="submit" class="rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100">
+            Flag for Merge Review
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="rounded-xl bg-white p-5 shadow">
       <h3 class="text-sm font-semibold uppercase tracking-wide text-gray-500">Metadata</h3>
       <dl class="mt-3 space-y-2 text-sm">
         <div class="flex justify-between gap-4">
@@ -88,6 +120,24 @@
         <div class="flex justify-between gap-4">
           <dt class="text-gray-500">Match Key</dt>
           <dd class="break-all font-mono text-xs text-gray-700">{{ product.match_key or '—' }}</dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt class="text-gray-500">Normalized Name</dt>
+          <dd class="break-all font-mono text-xs text-gray-700">{{ product.normalized_name or '—' }}</dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt class="text-gray-500">Parsed Size</dt>
+          <dd class="text-gray-700">{{ size_summary }}</dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt class="text-gray-500">Pack Count</dt>
+          <dd class="text-gray-700">{{ size_pack_count if size_pack_count is not none else '—' }}</dd>
+        </div>
+        <div class="flex justify-between gap-4">
+          <dt class="text-gray-500">Photo Status</dt>
+          <dd class="{% if missing_photo %}text-rose-700{% else %}text-gray-700{% endif %}">
+            {% if missing_photo %}Missing{% else %}Available{% endif %}
+          </dd>
         </div>
         <div class="flex justify-between gap-4">
           <dt class="text-gray-500">Updated</dt>

@@ -3,9 +3,11 @@ from agent.scraping.normalizer import (
     build_checksum,
     normalize_brand,
     normalize_category,
+    normalize_display_name,
     normalize_name,
     parse_price,
     parse_size,
+    strip_size_from_name,
 )
 
 
@@ -22,6 +24,23 @@ def test_parse_size():
     size = parse_size("Grace Baked Beans 400 g")
     assert size.value == 400.0
     assert size.unit == "g"
+    assert size.pack_count is None
+
+
+def test_parse_size_multipack():
+    size = parse_size("Pepsi 6x330ml")
+    assert size.value == 330.0
+    assert size.unit == "ml"
+    assert size.pack_count == 6
+
+
+def test_strip_size_from_name():
+    assert strip_size_from_name("Grace Coconut Milk 400ml") == "Grace Coconut Milk"
+    assert strip_size_from_name("Pepsi 6x330ml") == "Pepsi"
+
+
+def test_normalize_display_name():
+    assert normalize_display_name("GRACE BAKED BEANS") == "Grace Baked Beans"
 
 
 def test_build_checksum_changes_with_size():
@@ -29,6 +48,14 @@ def test_build_checksum_changes_with_size():
     size_b = SizeInfo(value=500.0, unit="g")
     checksum_a = build_checksum("demo", "grace baked beans", "Grace", size_a)
     checksum_b = build_checksum("demo", "grace baked beans", "Grace", size_b)
+    assert checksum_a != checksum_b
+
+
+def test_build_checksum_changes_with_pack_count():
+    size_a = SizeInfo(value=330.0, unit="ml", pack_count=1)
+    size_b = SizeInfo(value=330.0, unit="ml", pack_count=6)
+    checksum_a = build_checksum("demo", "pepsi", "Pepsi", size_a)
+    checksum_b = build_checksum("demo", "pepsi", "Pepsi", size_b)
     assert checksum_a != checksum_b
 
 

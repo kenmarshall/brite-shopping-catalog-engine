@@ -10,6 +10,13 @@
   </div>
 </div>
 
+{% if message %}
+<div class="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ error }}</div>
+{% endif %}
+
 <!-- Search & Filters -->
 <div class="flex gap-3 mb-4">
   <input
@@ -21,7 +28,7 @@
     hx-get="/admin/products"
     hx-trigger="keyup changed delay:300ms"
     hx-target="#product-table-body"
-    hx-include="[name='store']"
+    hx-include="[name='store'],[name='photo'],[name='flagged']"
     hx-push-url="true"
   >
   <select
@@ -30,7 +37,7 @@
     hx-get="/admin/products"
     hx-trigger="change"
     hx-target="#product-table-body"
-    hx-include="[name='q']"
+    hx-include="[name='q'],[name='photo'],[name='flagged']"
     hx-push-url="true"
   >
     <option value="">All Stores</option>
@@ -38,7 +45,37 @@
     <option value="{{ s._id }}" {% if active_store == s._id %}selected{% endif %}>{{ s.store_name or s._id }}</option>
     {% endfor %}
   </select>
+  <select
+    name="photo"
+    class="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+    hx-get="/admin/products"
+    hx-trigger="change"
+    hx-target="#product-table-body"
+    hx-include="[name='q'],[name='store'],[name='flagged']"
+    hx-push-url="true"
+  >
+    <option value="" {% if not active_photo %}selected{% endif %}>All Photos</option>
+    <option value="missing" {% if active_photo == "missing" %}selected{% endif %}>Missing Photos</option>
+    <option value="present" {% if active_photo == "present" %}selected{% endif %}>Has Photos</option>
+  </select>
+  <select
+    name="flagged"
+    class="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
+    hx-get="/admin/products"
+    hx-trigger="change"
+    hx-target="#product-table-body"
+    hx-include="[name='q'],[name='store'],[name='photo']"
+    hx-push-url="true"
+  >
+    <option value="" {% if not active_flagged %}selected{% endif %}>All Flags</option>
+    <option value="1" {% if active_flagged == "1" %}selected{% endif %}>Merge Flagged</option>
+  </select>
 </div>
+
+<p class="mb-4 text-xs text-gray-500">
+  Flow: search products, click <span class="font-semibold">Flag Merge</span> on suspected duplicates, then open
+  <a href="/admin/curator" class="text-brand hover:underline">AI Curator</a> to merge or normalize clusters.
+</p>
 
 <!-- Product Table -->
 <div class="bg-white rounded-lg shadow overflow-hidden">
@@ -63,12 +100,12 @@
 {% if total_pages > 1 %}
 <div class="flex justify-center items-center gap-2 mt-4">
   {% if page > 1 %}
-  <a href="/admin/products?q={{ query }}&store={{ active_store }}&page={{ page - 1 }}"
+  <a href="/admin/products?q={{ query }}&store={{ active_store }}&photo={{ active_photo }}&flagged={{ active_flagged }}&page={{ page - 1 }}"
      class="px-3 py-1 rounded border text-sm hover:bg-gray-100">Prev</a>
   {% endif %}
   <span class="text-sm text-gray-500">Page {{ page }} of {{ total_pages }}</span>
   {% if page < total_pages %}
-  <a href="/admin/products?q={{ query }}&store={{ active_store }}&page={{ page + 1 }}"
+  <a href="/admin/products?q={{ query }}&store={{ active_store }}&photo={{ active_photo }}&flagged={{ active_flagged }}&page={{ page + 1 }}"
      class="px-3 py-1 rounded border text-sm hover:bg-gray-100">Next</a>
   {% endif %}
 </div>

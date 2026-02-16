@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit
 
 import yaml
 from bson import ObjectId
@@ -21,8 +21,10 @@ from agent.scraping.normalizer import (
     build_match_key,
     normalize_brand,
     normalize_category,
+    normalize_display_name,
     normalize_name,
     parse_size,
+    strip_size_from_name,
 )
 from agent.scraping.pipeline import run_scrape
 from agent.utils.logging import get_logger
@@ -114,6 +116,87 @@ def _non_empty(values: list[Any]) -> list[str]:
         if text and text not in cleaned:
             cleaned.append(text)
     return cleaned
+
+
+def _is_missing_photo(doc: dict[str, Any]) -> bool:
+    image_url = str(doc.get("image_url") or "").strip()
+    return not image_url or image_url.startswith("data:")
+
+
+def _float_text(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:g}"
+
+
+def _format_size(size: SizeInfo) -> str:
+    if size.pack_count and size.value is not None and size.unit:
+        return f"{size.pack_count} x {_float_text(size.value)}{size.unit}"
+    if size.pack_count:
+        return f"{size.pack_count} pack"
+    if size.value is not None and size.unit:
+        return f"{_float_text(size.value)}{size.unit}"
+    if size.value is not None:
+        return _float_text(size.value)
+    return "—"
+
+
+def _size_hint_from_size(size: SizeInfo) -> str:
+    if size.pack_count and size.value is not None and size.unit:
+        return f"{size.pack_count}x{_float_text(size.value)}{size.unit}"
+    if size.pack_count:
+        return f"{size.pack_count} pack"
+    if size.value is not None and size.unit:
+        return f"{_float_text(size.value)}{size.unit}"
+    return ""
+
+
+def _cleanup_name_suggestion(name: str) -> str:
+    stripped = strip_size_from_name(name).strip()
+    candidate = stripped or name
+    normalized = normalize_display_name(candidate)
+    return normalized.strip() or name.strip()
+
+
+def _build_back_target(
+    request: Request,
+    fallback: str,
+    *,
+    message: str | None = None,
+    error: str | None = None,
+) -> str:
+    referer = request.headers.get("referer", "")
+    parsed = urlsplit(referer)
+    if parsed.path.startswith("/admin/"):
+        base_path = parsed.path
+        query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    else:
+        fallback_parsed = urlsplit(fallback)
+        base_path = fallback_parsed.path or fallback
+        query_pairs = parse_qsl(fallback_parsed.query, keep_blank_values=True)
+
+    query_params: dict[str, str] = {}
+    for key, value in query_pairs:
+        query_params[key] = value
+
+    if message:
+        query_params["message"] = message
+    if error:
+        query_params["error"] = error
+
+    query = urlencode(query_params)
+    return f"{base_path}?{query}" if query else base_path
+
+
+def _redirect_back(
+    request: Request,
+    fallback: str,
+    *,
+    message: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    target = _build_back_target(request, fallback, message=message, error=error)
+    return RedirectResponse(target, status_code=303)
 
 
 def _snapshot_docs(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -215,6 +298,154 @@ def _collect_curator_conflicts(
     )
 
 
+def _collect_manual_merge_flags(
+    mongo: MongoService,
+    *,
+    top_k: int = 25,
+) -> tuple[list[dict[str, Any]], int]:
+    pipeline = [
+        {"$match": {"curator.manual_merge_flag": True, "normalized_name": {"$nin": [None, ""]}}},
+        {
+            "$group": {
+                "_id": "$normalized_name",
+                "count": {"$sum": 1},
+                "stores": {"$addToSet": {"$ifNull": ["$store_id", ""]}},
+                "sample_names": {"$addToSet": {"$ifNull": ["$name", ""]}},
+                "notes": {"$addToSet": {"$ifNull": ["$curator.manual_merge_note", ""]}},
+            }
+        },
+        {"$sort": {"count": -1}},
+        {"$limit": top_k},
+    ]
+    rows = list(mongo.products.aggregate(pipeline))
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        normalized_name = str(row.get("_id", "")).strip()
+        if not normalized_name:
+            continue
+        sample_names = _non_empty(row.get("sample_names") or [])
+        notes = _non_empty(row.get("notes") or [])
+        results.append(
+            {
+                "normalized_name": normalized_name,
+                "sample_name": sample_names[0] if sample_names else normalized_name,
+                "count": int(row.get("count", 0)),
+                "stores": _non_empty(row.get("stores") or []),
+                "notes": notes,
+            }
+        )
+
+    total_flagged_products = mongo.products.count_documents({"curator.manual_merge_flag": True})
+    return results, total_flagged_products
+
+
+def _collect_name_cleanup_candidates(
+    mongo: MongoService,
+    *,
+    top_k: int = 25,
+) -> tuple[list[dict[str, Any]], int]:
+    projection = {
+        "name": 1,
+        "store_id": 1,
+        "store_name": 1,
+        "normalized_name": 1,
+        "size": 1,
+        "updated_at": 1,
+    }
+    rows: list[dict[str, Any]] = []
+    total_candidates = 0
+    cursor = mongo.products.find({}, projection)
+
+    for doc in cursor:
+        raw_name = str(doc.get("name") or "").strip()
+        if not raw_name:
+            continue
+
+        stripped = strip_size_from_name(raw_name).strip()
+        suggested_name = _cleanup_name_suggestion(raw_name)
+        inferred_size = parse_size(raw_name)
+        existing_size = _size_info_from_doc(doc)
+
+        has_size_tokens = bool(stripped and normalize_name(stripped) != normalize_name(raw_name))
+        has_case_issue = raw_name != suggested_name
+        size_missing = (
+            existing_size.value is None
+            and existing_size.unit is None
+            and inferred_size.value is not None
+            and inferred_size.unit is not None
+        )
+        pack_missing = (
+            inferred_size.pack_count is not None
+            and (existing_size.pack_count or 0) != inferred_size.pack_count
+        )
+
+        if not (has_size_tokens or has_case_issue or size_missing or pack_missing):
+            continue
+
+        total_candidates += 1
+        if len(rows) >= top_k:
+            continue
+
+        reasons: list[str] = []
+        if has_size_tokens:
+            reasons.append("size in name")
+        if has_case_issue:
+            reasons.append("case mismatch")
+        if size_missing:
+            reasons.append("size missing")
+        if pack_missing:
+            reasons.append("pack count missing")
+
+        rows.append(
+            {
+                "product_id": str(doc.get("_id")),
+                "current_name": raw_name,
+                "normalized_name": str(doc.get("normalized_name") or ""),
+                "suggested_name": suggested_name,
+                "store_name": doc.get("store_name") or doc.get("store_id") or "—",
+                "current_size": _format_size(existing_size),
+                "suggested_size": _format_size(inferred_size),
+                "reasons": reasons,
+            }
+        )
+
+    return rows, total_candidates
+
+
+def _collect_missing_photo_candidates(
+    mongo: MongoService,
+    *,
+    top_k: int = 25,
+) -> tuple[list[dict[str, Any]], int]:
+    missing_photo_query = {
+        "$or": [
+            {"image_url": {"$in": [None, ""]}},
+            {"image_url": {"$regex": "^data:", "$options": "i"}},
+        ]
+    }
+    total_missing = mongo.products.count_documents(missing_photo_query)
+    docs = list(
+        mongo.products.find(
+            missing_photo_query,
+            {
+                "name": 1,
+                "store_id": 1,
+                "store_name": 1,
+                "brand": 1,
+                "category": 1,
+                "normalized_name": 1,
+                "updated_at": 1,
+            },
+        )
+        .sort("updated_at", -1)
+        .limit(top_k)
+    )
+    for doc in docs:
+        doc["_id"] = str(doc["_id"])
+    return docs, total_missing
+
+
 def _normalize_cluster_name(normalized_name: str) -> str:
     return normalize_name(normalized_name or "")
 
@@ -264,11 +495,13 @@ def _merge_location_prices(
 def _size_info_from_doc(doc: dict[str, Any]) -> SizeInfo:
     size = doc.get("size") or {}
     if hasattr(size, "value") and hasattr(size, "unit"):
-        return SizeInfo(value=size.value, unit=size.unit)
+        pack_count = getattr(size, "pack_count", None)
+        return SizeInfo(value=size.value, unit=size.unit, pack_count=pack_count)
     if isinstance(size, dict):
         return SizeInfo(
             value=_coerce_float(size.get("value")),
             unit=str(size.get("unit")).strip().lower() if size.get("unit") else None,
+            pack_count=int(size.get("pack_count")) if size.get("pack_count") else None,
         )
     return SizeInfo()
 
@@ -290,17 +523,17 @@ def _dominant_text_value(docs: list[dict[str, Any]], field: str) -> str | None:
 
 
 def _dominant_size(docs: list[dict[str, Any]]) -> SizeInfo:
-    counts: dict[tuple[float | None, str | None], int] = {}
+    counts: dict[tuple[float | None, str | None, int | None], int] = {}
     for doc in docs:
         size = _size_info_from_doc(doc)
-        key = (size.value, size.unit)
-        if size.value is None and size.unit is None:
+        key = (size.value, size.unit, size.pack_count)
+        if size.value is None and size.unit is None and size.pack_count is None:
             continue
         counts[key] = counts.get(key, 0) + 1
     if not counts:
         return _size_info_from_doc(docs[0]) if docs else SizeInfo()
     winner = max(counts.items(), key=lambda item: item[1])[0]
-    return SizeInfo(value=winner[0], unit=winner[1])
+    return SizeInfo(value=winner[0], unit=winner[1], pack_count=winner[2])
 
 
 # ---- Dashboard ----
@@ -350,8 +583,12 @@ async def product_list(
     request: Request,
     q: str = Query("", alias="q"),
     store: str = Query("", alias="store"),
+    flagged: str = Query("", alias="flagged"),
+    photo: str = Query("", alias="photo"),
     page: int = Query(1),
     limit: int = Query(50),
+    message: str = Query("", alias="message"),
+    error: str = Query("", alias="error"),
 ):
     mongo = _get_mongo()
     skip = (page - 1) * limit
@@ -369,6 +606,26 @@ async def product_list(
         )
     if store:
         conditions.append({"store_id": store})
+    if flagged == "1":
+        conditions.append({"curator.manual_merge_flag": True})
+    if photo == "missing":
+        conditions.append(
+            {
+                "$or": [
+                    {"image_url": {"$in": [None, ""]}},
+                    {"image_url": {"$regex": "^data:", "$options": "i"}},
+                ]
+            }
+        )
+    elif photo == "present":
+        conditions.append(
+            {
+                "$and": [
+                    {"image_url": {"$exists": True, "$nin": [None, ""]}},
+                    {"image_url": {"$not": {"$regex": "^data:", "$options": "i"}}},
+                ]
+            }
+        )
     if conditions:
         query = {"$and": conditions} if len(conditions) > 1 else conditions[0]
 
@@ -379,6 +636,9 @@ async def product_list(
     total_pages = math.ceil(total / limit) if total else 1
     for product in products:
         product["_id"] = str(product["_id"])
+        curator_meta = product.get("curator") or {}
+        product["_manual_merge_flag"] = bool(curator_meta.get("manual_merge_flag"))
+        product["_missing_photo"] = _is_missing_photo(product)
 
     store_pipeline = [
         {"$group": {"_id": "$store_id", "store_name": {"$first": "$store_name"}}},
@@ -405,11 +665,15 @@ async def product_list(
             "products": products,
             "query": q,
             "active_store": store,
+            "active_flagged": flagged,
+            "active_photo": photo,
             "stores": stores,
             "page": page,
             "limit": limit,
             "total": total,
             "total_pages": total_pages,
+            "message": message,
+            "error": error,
             "page_title": "Products",
             "active_nav": "products",
         },
@@ -511,7 +775,12 @@ async def product_create(request: Request):
 
 
 @router.get("/products/{product_id}", response_class=HTMLResponse)
-async def product_detail(request: Request, product_id: str):
+async def product_detail(
+    request: Request,
+    product_id: str,
+    message: str = Query("", alias="message"),
+    error: str = Query("", alias="error"),
+):
     oid = _object_id_or_none(product_id)
     if oid is None:
         return HTMLResponse("Invalid product ID", status_code=400)
@@ -520,11 +789,22 @@ async def product_detail(request: Request, product_id: str):
     if not product:
         return HTMLResponse("Product not found", status_code=404)
     product["_id"] = str(product["_id"])
+    size_info = _size_info_from_doc(product)
+    size_hint = _size_hint_from_size(size_info) or str(product.get("name") or "")
+    curator_meta = product.get("curator") or {}
     return templates.TemplateResponse(
         "products/detail.html",
         {
             "request": request,
             "product": product,
+            "size_hint": size_hint,
+            "size_summary": _format_size(size_info),
+            "size_pack_count": size_info.pack_count,
+            "manual_merge_flag": bool(curator_meta.get("manual_merge_flag")),
+            "manual_merge_note": str(curator_meta.get("manual_merge_note") or ""),
+            "missing_photo": _is_missing_photo(product),
+            "message": message,
+            "error": error,
             "page_title": f"Edit: {product.get('name', '')[:40]}",
             "active_nav": "products",
         },
@@ -590,6 +870,56 @@ async def product_update(request: Request, product_id: str):
 
     mongo.products.update_one({"_id": oid}, {"$set": updates})
     return RedirectResponse(f"/admin/products/{product_id}", status_code=303)
+
+
+@router.post("/products/{product_id}/flag-merge", response_class=HTMLResponse)
+async def product_flag_merge(request: Request, product_id: str):
+    oid = _object_id_or_none(product_id)
+    if oid is None:
+        return _redirect_back(request, "/admin/products", error="Invalid product ID")
+
+    mongo = _get_mongo()
+    product = mongo.products.find_one({"_id": oid}, {"_id": 1})
+    if not product:
+        return _redirect_back(request, "/admin/products", error="Product not found")
+
+    form = await request.form()
+    note = str(form.get("note", "")).strip()
+    updates: dict[str, Any] = {
+        "curator.manual_merge_flag": True,
+        "curator.flagged_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    }
+    if note:
+        updates["curator.manual_merge_note"] = note
+
+    mongo.products.update_one({"_id": oid}, {"$set": updates})
+    return _redirect_back(request, "/admin/products", message="Product flagged for merge review")
+
+
+@router.post("/products/{product_id}/unflag-merge", response_class=HTMLResponse)
+async def product_unflag_merge(request: Request, product_id: str):
+    oid = _object_id_or_none(product_id)
+    if oid is None:
+        return _redirect_back(request, "/admin/products", error="Invalid product ID")
+
+    mongo = _get_mongo()
+    product = mongo.products.find_one({"_id": oid}, {"_id": 1})
+    if not product:
+        return _redirect_back(request, "/admin/products", error="Product not found")
+
+    mongo.products.update_one(
+        {"_id": oid},
+        {
+            "$unset": {
+                "curator.manual_merge_flag": "",
+                "curator.manual_merge_note": "",
+                "curator.flagged_at": "",
+            },
+            "$set": {"updated_at": datetime.utcnow()},
+        },
+    )
+    return _redirect_back(request, "/admin/products", message="Merge flag removed")
 
 
 @router.delete("/products/{product_id}", response_class=HTMLResponse)
@@ -840,6 +1170,15 @@ async def curator_page(
         mongo,
         top_k=limit,
     )
+    manual_merge_flags, flagged_product_total = _collect_manual_merge_flags(mongo, top_k=limit)
+    name_cleanup_candidates, name_cleanup_total = _collect_name_cleanup_candidates(
+        mongo,
+        top_k=limit,
+    )
+    missing_photo_candidates, missing_photo_total = _collect_missing_photo_candidates(
+        mongo,
+        top_k=limit,
+    )
     recent_actions = _list_recent_curator_actions(mongo)
     return templates.TemplateResponse(
         "curator/list.html",
@@ -848,6 +1187,12 @@ async def curator_page(
             "brand_conflicts": brand_conflicts,
             "category_conflicts": category_conflicts,
             "match_key_conflicts": match_key_conflicts,
+            "manual_merge_flags": manual_merge_flags,
+            "flagged_product_total": flagged_product_total,
+            "name_cleanup_candidates": name_cleanup_candidates,
+            "name_cleanup_total": name_cleanup_total,
+            "missing_photo_candidates": missing_photo_candidates,
+            "missing_photo_total": missing_photo_total,
             "recent_actions": recent_actions,
             "limit": limit,
             "message": message,
@@ -1082,6 +1427,124 @@ async def curator_normalize_category(
         f"Normalized category to '{dominant_category}' for {len(docs)} products "
         f"({modified} updated). Action #{action_id}."
     )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/normalize-name-size", response_class=HTMLResponse)
+async def curator_normalize_name_size(
+    product_id: str = Form(...),
+    limit: int = Form(25),
+):
+    oid = _object_id_or_none(product_id)
+    if oid is None:
+        msg = quote_plus("Invalid product ID")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    mongo = _get_mongo()
+    doc = mongo.products.find_one({"_id": oid})
+    if not doc:
+        msg = quote_plus("Product not found")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    before_docs = _snapshot_docs([doc])
+    original_name = str(doc.get("name") or "").strip()
+    if not original_name:
+        msg = quote_plus("Product has no name to normalize")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    cleaned_name = _cleanup_name_suggestion(original_name)
+    normalized_name = normalize_name(cleaned_name)
+    existing_size = _size_info_from_doc(doc)
+    inferred_size = parse_size(original_name)
+    if (
+        inferred_size.value is not None
+        or inferred_size.unit is not None
+        or inferred_size.pack_count
+    ):
+        final_size = inferred_size
+    else:
+        final_size = existing_size
+
+    normalized_brand = normalize_brand(str(doc.get("brand") or "").strip() or None)
+    updates = {
+        "name": cleaned_name,
+        "normalized_name": normalized_name,
+        "size": final_size.model_dump(),
+        "match_key": build_match_key(normalized_name, normalized_brand, final_size),
+        "checksum": build_checksum(
+            str(doc.get("store_id") or "unknown"),
+            normalized_name,
+            normalized_brand,
+            final_size,
+        ),
+        "updated_at": datetime.utcnow(),
+    }
+    mongo.products.update_one({"_id": oid}, {"$set": updates})
+
+    after_docs = list(mongo.products.find({"_id": oid}))
+    action_id = _record_curator_action(
+        mongo,
+        action_type="normalize_name_size",
+        normalized_name=normalized_name,
+        summary=(
+            f"Normalized name to '{cleaned_name}' and refreshed size "
+            f"({_format_size(final_size)})."
+        ),
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
+
+    msg = quote_plus(
+        f"Normalized '{original_name}' -> '{cleaned_name}'. "
+        f"Size now {_format_size(final_size)}. Action #{action_id}."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/flags/clear", response_class=HTMLResponse)
+async def curator_clear_manual_flags(
+    normalized_name: str = Form(...),
+    limit: int = Form(25),
+):
+    key = _normalize_cluster_name(normalized_name)
+    if not key:
+        msg = quote_plus("Invalid cluster name")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    mongo = _get_mongo()
+    docs = list(
+        mongo.products.find(
+            {"normalized_name": key, "curator.manual_merge_flag": True}
+        )
+    )
+    if not docs:
+        msg = quote_plus("No manual flags found for that cluster")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    before_docs = _snapshot_docs(docs)
+    ids = [doc["_id"] for doc in docs]
+    mongo.products.update_many(
+        {"_id": {"$in": ids}},
+        {
+            "$unset": {
+                "curator.manual_merge_flag": "",
+                "curator.manual_merge_note": "",
+                "curator.flagged_at": "",
+            },
+            "$set": {"updated_at": datetime.utcnow()},
+        },
+    )
+    after_docs = list(mongo.products.find({"_id": {"$in": ids}}))
+    action_id = _record_curator_action(
+        mongo,
+        action_type="clear_manual_flags",
+        normalized_name=key,
+        summary=f"Cleared manual merge flags from {len(ids)} products.",
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
+
+    msg = quote_plus(f"Cleared {len(ids)} manual flags for '{key}'. Action #{action_id}.")
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
