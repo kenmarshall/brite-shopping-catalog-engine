@@ -1,4 +1,4 @@
-<!-- SYNC: When updating this file, also update AGENTS.md with the same changes (and vice versa). -->
+<!-- SYNC: When updating this file, also update CLAUDE.md with the same changes (and vice versa). -->
 # Brite Shopping Catalog Engine
 
 Scraping, normalization, and semantic search service for Jamaican grocery products. Part of the Brite Shopping price comparison platform — helps Jamaican shoppers find products across stores/locations, compare prices, and shop economically.

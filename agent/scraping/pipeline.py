@@ -75,7 +75,9 @@ def _next_page_url(
 
         parsed = urlparse(current_url)
         params = parse_qs(parsed.query)
-        next_page = page_count + 1
+        current_page_values = params.get(page_param, ["1"])
+        current_page = int(current_page_values[0])
+        next_page = current_page + 1
         params[page_param] = [str(next_page)]
         new_query = urlencode(params, doseq=True)
         return urlunparse(parsed._replace(query=new_query))
@@ -85,6 +87,12 @@ def _next_page_url(
 
 async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[str, Any] | None:
     config = get_source_config(store_id)
+
+    # Dispatch to LocCloud scraper for stores using that platform
+    auth_strategy = config.get("auth", {}).get("strategy", "none")
+    if auth_strategy == "loccloud":
+        return await _scrape_loccloud(store_id, config)
+
     job = models.ScrapeJob(store_id=store_id, status="running")
     mongo = MongoService()
     job_id = mongo.create_job(job)
@@ -233,6 +241,65 @@ def run_scrape(
             "use `await scrape_store(...)` or `await scrape_url(...)` instead."
         )
     return loop.run_until_complete(runner())
+
+
+async def _scrape_loccloud(store_id: str, config: dict[str, Any]) -> dict[str, Any] | None:
+    """Scrape a LocCloud/ExtJS e-store (e.g., Hi-Lo Food Stores)."""
+    from agent.scraping.loccloud import (
+        fetch_catalog_xml,
+        login_and_get_session,
+        parse_catalog_xml,
+    )
+
+    job = models.ScrapeJob(store_id=store_id, status="running")
+    mongo = MongoService()
+    job_id = mongo.create_job(job)
+    stats = job.stats
+    catalog_id, catalog_name = resolve_catalog_identity(config, store_id)
+    defaults = config.get("defaults", {})
+    default_brand = defaults.get("brand")
+    currency = defaults.get("currency", "JMD")
+
+    browser = None
+    try:
+        headless = config.get("auth", {}).get("headless", True)
+        browser, context, session = await login_and_get_session(headless=headless)
+
+        xml = await fetch_catalog_xml(session)
+        raw_products = parse_catalog_xml(xml)
+        LOGGER.info("Parsed %d products from LocCloud catalog", len(raw_products))
+
+        stats.seen = len(raw_products)
+        for raw in raw_products:
+            product = parsers.raw_to_product(
+                raw,
+                store_id=catalog_id,
+                store_name=catalog_name,
+                default_brand=default_brand,
+            )
+            product.updated_at = datetime.utcnow()
+            product.created_at = datetime.utcnow()
+            product = await enrich_product(product)
+            _, created = mongo.upsert_product(product)
+            if created:
+                stats.saved += 1
+            else:
+                stats.updated += 1
+
+        mongo.update_job(
+            job_id,
+            {"status": "done", "stats": stats.model_dump(), "finished_at": datetime.utcnow()},
+        )
+    except Exception as exc:
+        LOGGER.exception("LocCloud scrape failed")
+        mongo.update_job(job_id, {"status": "error", "errors": [{"url": "*", "reason": str(exc)}]})
+    finally:
+        if browser:
+            await browser.close()
+
+    result = mongo.get_job(str(job_id))
+    LOGGER.info("LocCloud scrape done: %s", result)
+    return result
 
 
 __all__ = [

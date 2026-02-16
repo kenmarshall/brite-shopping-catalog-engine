@@ -158,28 +158,18 @@
   store:
     name: "Hi-Lo"
   catalog_name: "Hi-Lo Food Stores"
-  base_url: "https://hilofoodstoresja.com"
+  base_url: "https://hilofoodstoresja.loccloud.net"
   defaults:
     brand: null
     currency: "JMD"
   auth:
-    strategy: playwright
+    strategy: loccloud
     storage_state_path: "./data/sessions/hilo.json"
   navigation:
     start_paths:
-      - "https://hilofoodstoresja.com/shop/"
-    pagination:
-      next_selector: "a.next.page-numbers"
-      max_pages: null
-  selectors:
-    product: ".products .product"
-    name: ".woocommerce-loop-product__title"
-    price: ".woocommerce-Price-amount"
-    image: "img::attr(src)"
-    size_hint: ".woocommerce-loop-product__title"
-    brand_hint: null
-    category_hint: null
-    location_hint: null
+      - "https://hilofoodstoresja.loccloud.net/xstore/index.html#desktop=pos.desktopproduct"
+    pagination: {}
+  selectors: {}
   rate_limits:
     rpm: 15
     concurrency: 1
