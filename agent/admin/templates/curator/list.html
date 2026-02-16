@@ -16,6 +16,13 @@
   </form>
 </div>
 
+{% if message %}
+<div class="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ error }}</div>
+{% endif %}
+
 <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
   <div class="rounded-xl bg-white p-5 shadow">
     <p class="text-xs uppercase tracking-wide text-gray-500">Match Key Conflicts</p>
@@ -61,7 +68,14 @@
             <td class="px-4 py-3 text-xs text-gray-700">{{ row.stores | join(', ') }}</td>
             <td class="px-4 py-3 text-xs text-gray-700">{{ row.brands | join(', ') if row.brands else '—' }}</td>
             <td class="px-4 py-3 text-right">
-              <a href="/admin/products?q={{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review Products</a>
+              <div class="inline-flex items-center gap-2">
+                <a href="/admin/products?q={{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+                <form method="post" action="/admin/curator/merge" class="inline">
+                  <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                  <input type="hidden" name="limit" value="{{ limit }}">
+                  <button type="submit" class="rounded-md border border-brand/30 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand hover:bg-brand/20">Merge</button>
+                </form>
+              </div>
             </td>
           </tr>
           {% endfor %}
@@ -87,6 +101,7 @@
             <th class="px-4 py-3 text-right">Docs</th>
             <th class="px-4 py-3">Brands</th>
             <th class="px-4 py-3">Stores</th>
+            <th class="px-4 py-3 text-right">Actions</th>
           </tr>
         </thead>
         <tbody class="divide-y">
@@ -99,11 +114,18 @@
             <td class="px-4 py-3 text-right font-mono">{{ row.count }}</td>
             <td class="px-4 py-3 text-xs text-gray-700">{{ row.brands | join(', ') }}</td>
             <td class="px-4 py-3 text-xs text-gray-700">{{ row.stores | join(', ') }}</td>
+            <td class="px-4 py-3 text-right">
+              <form method="post" action="/admin/curator/normalize-brand" class="inline">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100">Normalize Brand</button>
+              </form>
+            </td>
           </tr>
           {% endfor %}
           {% if not brand_conflicts %}
           <tr>
-            <td colspan="4" class="px-4 py-10 text-center text-gray-400">No brand conflicts found</td>
+            <td colspan="5" class="px-4 py-10 text-center text-gray-400">No brand conflicts found</td>
           </tr>
           {% endif %}
         </tbody>
@@ -123,6 +145,7 @@
             <th class="px-4 py-3 text-right">Docs</th>
             <th class="px-4 py-3">Categories</th>
             <th class="px-4 py-3">Stores</th>
+            <th class="px-4 py-3 text-right">Actions</th>
           </tr>
         </thead>
         <tbody class="divide-y">
@@ -135,11 +158,18 @@
             <td class="px-4 py-3 text-right font-mono">{{ row.count }}</td>
             <td class="px-4 py-3 text-xs text-gray-700">{{ row.categories | join(', ') }}</td>
             <td class="px-4 py-3 text-xs text-gray-700">{{ row.stores | join(', ') }}</td>
+            <td class="px-4 py-3 text-right">
+              <form method="post" action="/admin/curator/normalize-category" class="inline">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100">Normalize Category</button>
+              </form>
+            </td>
           </tr>
           {% endfor %}
           {% if not category_conflicts %}
           <tr>
-            <td colspan="4" class="px-4 py-10 text-center text-gray-400">No category conflicts found</td>
+            <td colspan="5" class="px-4 py-10 text-center text-gray-400">No category conflicts found</td>
           </tr>
           {% endif %}
         </tbody>

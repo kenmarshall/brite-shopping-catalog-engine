@@ -13,7 +13,7 @@ from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from agent.db.models import LocationPrice, Product
+from agent.db.models import LocationPrice, Product, SizeInfo
 from agent.db.mongo import MongoService
 from agent.scraping.normalizer import (
     build_checksum,
@@ -176,6 +176,94 @@ def _collect_curator_conflicts(
         category_conflicts[:top_k],
         match_key_conflicts[:top_k],
     )
+
+
+def _normalize_cluster_name(normalized_name: str) -> str:
+    return normalize_name(normalized_name or "")
+
+
+def _cluster_products(mongo: MongoService, normalized_name: str) -> list[dict[str, Any]]:
+    key = _normalize_cluster_name(normalized_name)
+    if not key:
+        return []
+    return list(mongo.products.find({"normalized_name": key}))
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _average_price(location_prices: list[dict[str, Any]]) -> float | None:
+    amounts = [_coerce_float(item.get("amount")) for item in location_prices]
+    values = [amount for amount in amounts if amount is not None]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def _merge_location_prices(
+    current: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_location: dict[str, dict[str, Any]] = {}
+    for source in [*current, *incoming]:
+        location_id = str(source.get("location_id") or "").strip()
+        if not location_id:
+            continue
+        payload = dict(source)
+        amount = _coerce_float(payload.get("amount"))
+        if amount is None:
+            continue
+        payload["amount"] = amount
+        by_location[location_id] = payload
+    return list(by_location.values())
+
+
+def _size_info_from_doc(doc: dict[str, Any]) -> SizeInfo:
+    size = doc.get("size") or {}
+    if hasattr(size, "value") and hasattr(size, "unit"):
+        return SizeInfo(value=size.value, unit=size.unit)
+    if isinstance(size, dict):
+        return SizeInfo(
+            value=_coerce_float(size.get("value")),
+            unit=str(size.get("unit")).strip().lower() if size.get("unit") else None,
+        )
+    return SizeInfo()
+
+
+def _dominant_text_value(docs: list[dict[str, Any]], field: str) -> str | None:
+    counts: dict[str, int] = {}
+    display: dict[str, str] = {}
+    for doc in docs:
+        value = str(doc.get(field) or "").strip()
+        if not value:
+            continue
+        key = value.lower()
+        counts[key] = counts.get(key, 0) + 1
+        display.setdefault(key, value)
+    if not counts:
+        return None
+    winner = max(counts.items(), key=lambda item: item[1])[0]
+    return display[winner]
+
+
+def _dominant_size(docs: list[dict[str, Any]]) -> SizeInfo:
+    counts: dict[tuple[float | None, str | None], int] = {}
+    for doc in docs:
+        size = _size_info_from_doc(doc)
+        key = (size.value, size.unit)
+        if size.value is None and size.unit is None:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return _size_info_from_doc(docs[0]) if docs else SizeInfo()
+    winner = max(counts.items(), key=lambda item: item[1])[0]
+    return SizeInfo(value=winner[0], unit=winner[1])
 
 
 # ---- Dashboard ----
@@ -667,6 +755,8 @@ async def scrape_status(request: Request):
 async def curator_page(
     request: Request,
     limit: int = Query(25, ge=5, le=100),
+    message: str = Query("", alias="message"),
+    error: str = Query("", alias="error"),
 ):
     mongo = _get_mongo()
     brand_conflicts, category_conflicts, match_key_conflicts = _collect_curator_conflicts(
@@ -681,7 +771,196 @@ async def curator_page(
             "category_conflicts": category_conflicts,
             "match_key_conflicts": match_key_conflicts,
             "limit": limit,
+            "message": message,
+            "error": error,
             "page_title": "AI Curator",
             "active_nav": "curator",
         },
     )
+
+
+@router.post("/curator/merge", response_class=HTMLResponse)
+async def curator_merge_cluster(
+    normalized_name: str = Form(...),
+    limit: int = Form(25),
+):
+    mongo = _get_mongo()
+    key = _normalize_cluster_name(normalized_name)
+    if not key:
+        msg = quote_plus("Invalid cluster name")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    docs = _cluster_products(mongo, key)
+    if len(docs) < 2:
+        msg = quote_plus("Cluster has fewer than 2 products, nothing to merge")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    docs_sorted = sorted(
+        docs,
+        key=lambda item: (
+            len(item.get("location_prices") or []),
+            1 if item.get("estimated_price") is not None else 0,
+            item.get("updated_at") or datetime.min,
+        ),
+        reverse=True,
+    )
+    canonical = docs_sorted[0]
+    duplicates = docs_sorted[1:]
+
+    dominant_brand = normalize_brand(_dominant_text_value(docs_sorted, "brand"))
+    dominant_category = normalize_category(_dominant_text_value(docs_sorted, "category"))
+    dominant_size = _dominant_size(docs_sorted)
+
+    merged_prices = list(canonical.get("location_prices") or [])
+    merged_tags = _non_empty(canonical.get("tags") or [])
+    tag_keys = {tag.lower() for tag in merged_tags}
+    merged_aliases = _non_empty(canonical.get("aliases") or [])
+    alias_keys = {alias.lower() for alias in merged_aliases}
+
+    canonical_name = str(canonical.get("name") or "").strip()
+    image_url = canonical.get("image_url")
+    url = canonical.get("url")
+
+    for duplicate in duplicates:
+        merged_prices = _merge_location_prices(
+            merged_prices,
+            duplicate.get("location_prices") or [],
+        )
+        duplicate_name = str(duplicate.get("name") or "").strip()
+        if duplicate_name and duplicate_name.lower() != canonical_name.lower():
+            if duplicate_name.lower() not in alias_keys:
+                merged_aliases.append(duplicate_name)
+                alias_keys.add(duplicate_name.lower())
+        for tag in _non_empty(duplicate.get("tags") or []):
+            lower_tag = tag.lower()
+            if lower_tag not in tag_keys:
+                merged_tags.append(tag)
+                tag_keys.add(lower_tag)
+        if not image_url and duplicate.get("image_url"):
+            image_url = duplicate.get("image_url")
+        if (not url or str(url).startswith("manual://")) and duplicate.get("url"):
+            url = duplicate.get("url")
+
+    if dominant_category:
+        dominant_category_tag = dominant_category.lower()
+        if dominant_category_tag not in tag_keys:
+            merged_tags.append(dominant_category_tag)
+            tag_keys.add(dominant_category_tag)
+
+    updated_at = datetime.utcnow()
+    updates = {
+        "brand": dominant_brand,
+        "category": dominant_category,
+        "size": dominant_size.model_dump(),
+        "location_prices": merged_prices,
+        "estimated_price": _average_price(merged_prices),
+        "tags": merged_tags,
+        "aliases": merged_aliases,
+        "image_url": image_url,
+        "url": url,
+        "match_key": build_match_key(key, dominant_brand, dominant_size),
+        "checksum": build_checksum(
+            str(canonical.get("store_id") or "unknown"),
+            key,
+            dominant_brand,
+            dominant_size,
+        ),
+        "updated_at": updated_at,
+    }
+
+    mongo.products.update_one({"_id": canonical["_id"]}, {"$set": updates})
+    duplicate_ids = [item["_id"] for item in duplicates]
+    mongo.products.delete_many({"_id": {"$in": duplicate_ids}})
+
+    msg = quote_plus(
+        f"Merged {len(docs)} products for '{canonical_name or key}'. "
+        f"Removed {len(duplicates)} duplicates."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/normalize-brand", response_class=HTMLResponse)
+async def curator_normalize_brand(
+    normalized_name: str = Form(...),
+    limit: int = Form(25),
+):
+    mongo = _get_mongo()
+    key = _normalize_cluster_name(normalized_name)
+    if not key:
+        msg = quote_plus("Invalid cluster name")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    docs = _cluster_products(mongo, key)
+    if len(docs) < 2:
+        msg = quote_plus("Cluster has fewer than 2 products, nothing to normalize")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    dominant_brand = normalize_brand(_dominant_text_value(docs, "brand"))
+    if not dominant_brand:
+        msg = quote_plus("No non-empty brand found in cluster")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    modified = 0
+    for doc in docs:
+        size = _size_info_from_doc(doc)
+        updates = {
+            "brand": dominant_brand,
+            "match_key": build_match_key(key, dominant_brand, size),
+            "checksum": build_checksum(
+                str(doc.get("store_id") or "unknown"),
+                key,
+                dominant_brand,
+                size,
+            ),
+            "updated_at": datetime.utcnow(),
+        }
+        result = mongo.products.update_one({"_id": doc["_id"]}, {"$set": updates})
+        modified += int(result.modified_count)
+
+    msg = quote_plus(
+        f"Normalized brand to '{dominant_brand}' for {len(docs)} products ({modified} updated)."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/normalize-category", response_class=HTMLResponse)
+async def curator_normalize_category(
+    normalized_name: str = Form(...),
+    limit: int = Form(25),
+):
+    mongo = _get_mongo()
+    key = _normalize_cluster_name(normalized_name)
+    if not key:
+        msg = quote_plus("Invalid cluster name")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    docs = _cluster_products(mongo, key)
+    if len(docs) < 2:
+        msg = quote_plus("Cluster has fewer than 2 products, nothing to normalize")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    dominant_category = normalize_category(_dominant_text_value(docs, "category"))
+    if not dominant_category:
+        msg = quote_plus("No non-empty category found in cluster")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    category_tag = dominant_category.lower()
+    modified = 0
+    for doc in docs:
+        tags = _non_empty(doc.get("tags") or [])
+        lower_tags = {tag.lower() for tag in tags}
+        if category_tag not in lower_tags:
+            tags.append(category_tag)
+        updates = {
+            "category": dominant_category,
+            "tags": tags,
+            "updated_at": datetime.utcnow(),
+        }
+        result = mongo.products.update_one({"_id": doc["_id"]}, {"$set": updates})
+        modified += int(result.modified_count)
+
+    msg = quote_plus(
+        f"Normalized category to '{dominant_category}' for {len(docs)} products "
+        f"({modified} updated)."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
