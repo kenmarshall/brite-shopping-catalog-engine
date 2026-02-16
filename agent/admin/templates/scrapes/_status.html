@@ -1,0 +1,62 @@
+<div class="border-b px-5 py-4">
+  <h3 class="text-lg font-semibold">Recent Jobs</h3>
+</div>
+<div class="overflow-x-auto">
+  <table class="min-w-full text-sm">
+    <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+      <tr>
+        <th class="px-4 py-3">Store</th>
+        <th class="px-4 py-3">Status</th>
+        <th class="px-4 py-3 text-right">Seen</th>
+        <th class="px-4 py-3 text-right">Saved</th>
+        <th class="px-4 py-3 text-right">Updated</th>
+        <th class="px-4 py-3">Started</th>
+        <th class="px-4 py-3">Finished</th>
+        <th class="px-4 py-3 text-right">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y">
+      {% for job in jobs %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 font-mono text-xs text-gray-700">{{ job.store_id or 'external' }}</td>
+        <td class="px-4 py-3">
+          {% if job.status == "running" %}
+          <span class="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">running</span>
+          {% elif job.status == "stopping" %}
+          <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">stopping</span>
+          {% elif job.status == "stopped" %}
+          <span class="inline-flex rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-800">stopped</span>
+          {% elif job.status == "done" %}
+          <span class="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">done</span>
+          {% elif job.status == "error" %}
+          <span class="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">error</span>
+          {% else %}
+          <span class="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">{{ job.status or 'unknown' }}</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3 text-right font-mono">{{ job.stats.seen if job.stats else 0 }}</td>
+        <td class="px-4 py-3 text-right font-mono">{{ job.stats.saved if job.stats else 0 }}</td>
+        <td class="px-4 py-3 text-right font-mono">{{ job.stats.updated if job.stats else 0 }}</td>
+        <td class="px-4 py-3 text-xs text-gray-600">{{ job.started_at.strftime('%Y-%m-%d %H:%M:%S') if job.started_at else '—' }}</td>
+        <td class="px-4 py-3 text-xs text-gray-600">{{ job.finished_at.strftime('%Y-%m-%d %H:%M:%S') if job.finished_at else '—' }}</td>
+        <td class="px-4 py-3 text-right">
+          {% if job.status in ["running", "stopping"] %}
+          <form method="post" action="/admin/scrapes/{{ job._id }}/stop" class="inline">
+            <button type="submit" class="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100">
+              {% if job.status == "stopping" %}Stop Requested{% else %}Stop{% endif %}
+            </button>
+          </form>
+          {% else %}
+          <span class="text-xs text-gray-400">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      {% if not jobs %}
+      <tr>
+        <td colspan="8" class="px-4 py-10 text-center text-gray-400">No scrape jobs yet</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>

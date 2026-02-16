@@ -107,13 +107,13 @@ async def _generate_tags(prompt: str) -> list[str]:
     return _normalize_tags(TAG_SPLIT_PATTERN.split(text))
 
 
-def _fallback_tags(product: Product) -> list[str]:
+def _fallback_tags(product: Product, include_size_unit: bool = False) -> list[str]:
     tags: list[str] = []
     if product.brand:
         tags.append(product.brand.lower())
     if product.category:
         tags.append(product.category.lower())
-    if product.size.unit:
+    if include_size_unit and product.size.unit:
         tags.append(product.size.unit.lower())
     return _normalize_tags(tags)
 
@@ -135,14 +135,15 @@ async def enrich_product(product: Product) -> Product:
         f"Details: size={product.size.value or ''} {product.size.unit or ''}\n"
     )
 
-    ai_tags = await _generate_tags(prompt)
+    ai_tags = _normalize_tags(await _generate_tags(prompt))
     if not ai_tags:
         LOGGER.debug("AI returned no tags for %s; leaving tag list empty", product.name)
         product.tags = []
     else:
         tags = list(ai_tags)
         if len(tags) < 5:
-            for fallback_tag in _fallback_tags(product):
+            include_size_unit = len(ai_tags) >= 3
+            for fallback_tag in _fallback_tags(product, include_size_unit=include_size_unit):
                 if fallback_tag not in tags:
                     tags.append(fallback_tag)
                 if len(tags) >= 5:

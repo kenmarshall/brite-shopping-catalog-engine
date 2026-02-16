@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+  <div>
+    <h2 class="text-2xl font-bold">Scrapes</h2>
+    <p class="mt-1 text-sm text-gray-500">Start scrapes, monitor job progress, and request safe stop for running jobs.</p>
+  </div>
+</div>
+
+{% if message %}
+<div class="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{{ message }}</div>
+{% endif %}
+{% if error %}
+<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ error }}</div>
+{% endif %}
+
+<div class="mb-6 rounded-xl bg-white p-5 shadow">
+  <h3 class="text-lg font-semibold">Start Scrape</h3>
+  <form method="post" action="/admin/scrapes/start" class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+    <div class="w-full sm:max-w-md">
+      <label class="mb-1 block text-sm font-medium text-gray-700">Source</label>
+      <select name="store_id" required class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+        <option value="">Select store source...</option>
+        {% for source in sources %}
+        <option value="{{ source.source_id }}">{{ source.display_name }} ({{ source.source_id }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
+      Start Scrape
+    </button>
+  </form>
+</div>
+
+<div
+  id="scrape-status"
+  class="rounded-xl bg-white shadow"
+  hx-get="/admin/scrapes/status"
+  hx-trigger="load, every 4s"
+  hx-swap="innerHTML"
+>
+  {% include "scrapes/_status.html" %}
+</div>
+{% endblock %}

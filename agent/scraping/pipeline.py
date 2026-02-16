@@ -4,11 +4,11 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 import yaml
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
 
 from agent.config.settings import get_settings
 from agent.db import models
@@ -19,6 +19,43 @@ from agent.scraping.playwright_client import fetch_html
 from agent.utils.logging import get_logger
 
 LOGGER = get_logger(__name__)
+
+
+def _serialize_job(mongo: MongoService, job_id: Any) -> dict[str, Any] | None:
+    job_doc = mongo.get_job(str(job_id))
+    if job_doc and "_id" in job_doc:
+        job_doc["_id"] = str(job_doc["_id"])
+    return job_doc
+
+
+def _should_stop(mongo: MongoService, job_id: Any) -> bool:
+    job_doc = mongo.get_job(str(job_id))
+    if not job_doc:
+        return False
+    return job_doc.get("status") == "stopping"
+
+
+def _mark_stopped(mongo: MongoService, job_id: Any, stats: models.ScrapeJobStats) -> None:
+    mongo.update_job(
+        job_id,
+        {
+            "status": "stopped",
+            "stats": stats.model_dump(),
+            "finished_at": datetime.utcnow(),
+        },
+    )
+
+
+def _stop_if_requested(
+    mongo: MongoService,
+    job_id: Any,
+    stats: models.ScrapeJobStats,
+) -> bool:
+    if not _should_stop(mongo, job_id):
+        return False
+    _mark_stopped(mongo, job_id, stats)
+    LOGGER.info("Scrape stopped early: %s", job_id)
+    return True
 
 
 def load_source_configs(path: Path) -> list[dict[str, Any]]:
@@ -71,7 +108,7 @@ def _next_page_url(
     # Strategy 2: Query-param pagination (Magento ?p=2, etc.)
     page_param = pagination.get("page_param")
     if page_param:
-        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
         parsed = urlparse(current_url)
         params = parse_qs(parsed.query)
@@ -113,20 +150,33 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
         pagination = navigation.get("pagination", {})
         max_pages = pagination.get("max_pages")
         for url in start_paths:
+            if _stop_if_requested(mongo, job_id, stats):
+                return _serialize_job(mongo, job_id)
             next_url = url
             visited: set[str] = set()
             page_count = 0
             while next_url and next_url not in visited:
+                if _stop_if_requested(mongo, job_id, stats):
+                    return _serialize_job(mongo, job_id)
                 visited.add(next_url)
                 page_count += 1
                 LOGGER.info("Scraping %s", next_url)
                 html = await fetch_category(next_url, use_playwright=use_playwright)
-                raw_products = parsers.parse_products(html, selectors, base_url or next_url, currency=currency)
+                if _stop_if_requested(mongo, job_id, stats):
+                    return _serialize_job(mongo, job_id)
+                raw_products = parsers.parse_products(
+                    html,
+                    selectors,
+                    base_url or next_url,
+                    currency=currency,
+                )
                 if not raw_products:
                     LOGGER.info("No products found on %s — stopping pagination", next_url)
                     break
                 stats.seen += len(raw_products)
                 for raw in raw_products:
+                    if _stop_if_requested(mongo, job_id, stats):
+                        return _serialize_job(mongo, job_id)
                     product = parsers.raw_to_product(
                         raw,
                         store_id=catalog_id,
@@ -157,12 +207,15 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
             {"status": "done", "stats": stats.model_dump(), "finished_at": datetime.utcnow()},
         )
     except Exception as exc:  # pragma: no cover
-        LOGGER.exception("Scrape failed")
-        mongo.update_job(job_id, {"status": "error", "errors": [{"url": "*", "reason": str(exc)}]})
-    job_doc = mongo.get_job(str(job_id))
-    if job_doc and "_id" in job_doc:
-        job_doc["_id"] = str(job_doc["_id"])
-    return job_doc
+        if _should_stop(mongo, job_id):
+            _mark_stopped(mongo, job_id, stats)
+        else:
+            LOGGER.exception("Scrape failed")
+            mongo.update_job(
+                job_id,
+                {"status": "error", "errors": [{"url": "*", "reason": str(exc)}]},
+            )
+    return _serialize_job(mongo, job_id)
 
 
 async def scrape_url(
@@ -171,7 +224,9 @@ async def scrape_url(
     config = get_source_config(store_id) if store_id else None
     selectors = config.get("selectors", {}) if config else {"product": ".product"}
     catalog_id, catalog_name = (
-        resolve_catalog_identity(config, store_id or "external") if config else (store_id or "external", "external")
+        resolve_catalog_identity(config, store_id or "external")
+        if config
+        else (store_id or "external", "external")
     )
     base_url = config.get("base_url", url) if config else url
     defaults = config.get("defaults", {}) if config else {}
@@ -185,10 +240,16 @@ async def scrape_url(
     job_id = mongo.create_job(job)
     stats = job.stats
     try:
+        if _stop_if_requested(mongo, job_id, stats):
+            return _serialize_job(mongo, job_id)
         html = await fetch_category(url, use_playwright=use_playwright)
+        if _stop_if_requested(mongo, job_id, stats):
+            return _serialize_job(mongo, job_id)
         raw_products = parsers.parse_products(html, selectors, base_url, currency=currency)
         stats.seen = len(raw_products)
         for raw in raw_products:
+            if _stop_if_requested(mongo, job_id, stats):
+                return _serialize_job(mongo, job_id)
             product = parsers.raw_to_product(
                 raw,
                 store_id=catalog_id,
@@ -206,12 +267,15 @@ async def scrape_url(
             {"status": "done", "stats": stats.model_dump(), "finished_at": datetime.utcnow()},
         )
     except Exception as exc:  # pragma: no cover
-        LOGGER.exception("Scrape failed")
-        mongo.update_job(job_id, {"status": "error", "errors": [{"url": url, "reason": str(exc)}]})
-    job_doc = mongo.get_job(str(job_id))
-    if job_doc and "_id" in job_doc:
-        job_doc["_id"] = str(job_doc["_id"])
-    return job_doc
+        if _should_stop(mongo, job_id):
+            _mark_stopped(mongo, job_id, stats)
+        else:
+            LOGGER.exception("Scrape failed")
+            mongo.update_job(
+                job_id,
+                {"status": "error", "errors": [{"url": url, "reason": str(exc)}]},
+            )
+    return _serialize_job(mongo, job_id)
 
 
 def run_scrape(
@@ -258,19 +322,23 @@ async def _scrape_loccloud(store_id: str, config: dict[str, Any]) -> dict[str, A
     catalog_id, catalog_name = resolve_catalog_identity(config, store_id)
     defaults = config.get("defaults", {})
     default_brand = defaults.get("brand")
-    currency = defaults.get("currency", "JMD")
-
     browser = None
     try:
+        if _stop_if_requested(mongo, job_id, stats):
+            return _serialize_job(mongo, job_id)
         headless = config.get("auth", {}).get("headless", True)
         browser, context, session = await login_and_get_session(headless=headless)
 
+        if _stop_if_requested(mongo, job_id, stats):
+            return _serialize_job(mongo, job_id)
         xml = await fetch_catalog_xml(session)
         raw_products = parse_catalog_xml(xml)
         LOGGER.info("Parsed %d products from LocCloud catalog", len(raw_products))
 
         stats.seen = len(raw_products)
         for raw in raw_products:
+            if _stop_if_requested(mongo, job_id, stats):
+                return _serialize_job(mongo, job_id)
             product = parsers.raw_to_product(
                 raw,
                 store_id=catalog_id,
@@ -291,13 +359,19 @@ async def _scrape_loccloud(store_id: str, config: dict[str, Any]) -> dict[str, A
             {"status": "done", "stats": stats.model_dump(), "finished_at": datetime.utcnow()},
         )
     except Exception as exc:
-        LOGGER.exception("LocCloud scrape failed")
-        mongo.update_job(job_id, {"status": "error", "errors": [{"url": "*", "reason": str(exc)}]})
+        if _should_stop(mongo, job_id):
+            _mark_stopped(mongo, job_id, stats)
+        else:
+            LOGGER.exception("LocCloud scrape failed")
+            mongo.update_job(
+                job_id,
+                {"status": "error", "errors": [{"url": "*", "reason": str(exc)}]},
+            )
     finally:
         if browser:
             await browser.close()
 
-    result = mongo.get_job(str(job_id))
+    result = _serialize_job(mongo, job_id)
     LOGGER.info("LocCloud scrape done: %s", result)
     return result
 
@@ -309,6 +383,8 @@ __all__ = [
     "scrape_url",
     "run_scrape",
 ]
+
+
 def resolve_catalog_identity(config: dict[str, Any], fallback_id: str) -> tuple[str, str]:
     entity_type = (config.get("entity_type") or "store").lower()
     source_name = config.get("catalog_name")

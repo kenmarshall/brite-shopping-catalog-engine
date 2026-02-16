@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import httpx
 from bson import ObjectId
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pymongo.errors import PyMongoError
 
+from agent.admin.router import router as admin_router
 from agent.config.settings import Settings, get_settings
 from agent.db.mongo import MongoService
 from agent.embeddings.faiss_index import FaissIndex
@@ -20,6 +23,12 @@ from agent.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 app = FastAPI(title="Brite Shopping Agent")
+app.include_router(admin_router)
+app.mount(
+    "/admin/static",
+    StaticFiles(directory=str(Path(__file__).resolve().parents[1] / "admin" / "static")),
+    name="admin-static",
+)
 
 
 @app.on_event("startup")
@@ -44,7 +53,6 @@ async def startup_checks() -> None:
         ) as client:
             response = await client.get("/api/version")
             response.raise_for_status()
-            payload = response.json()
         LOGGER.info(
             "Ollama connection successful",
         )
@@ -132,8 +140,17 @@ def rebuild_index(
                 LOGGER.error("Embedding regeneration failed for %s: %s", product_model.name, exc)
                 continue
             mongo.update_embedding(product["_id"], vector)
+        product_id = product.get("_id")
+        if product_id is None:
+            checksum = product.get("checksum")
+            if not checksum:
+                LOGGER.warning("Skipping product without _id/checksum during reindex")
+                continue
+            indexed_id = f"checksum:{checksum}"
+        else:
+            indexed_id = str(product_id)
         vectors.append(vector)
-        ids.append(str(product["_id"]))
+        ids.append(indexed_id)
     if vectors:
         index.reset(len(vectors[0]))
         index.add_vectors(vectors, ids)
@@ -196,16 +213,20 @@ def search(
         "tag_candidates": tag_candidates,
     }
     for product_id, score in blended[: payload.k]:
-        query_ids: list[Any] = []
-        if ObjectId.is_valid(product_id):
-            query_ids.append(ObjectId(product_id))
-        query_ids.append(product_id)
-
         product = None
-        for candidate_id in query_ids:
-            product = products.find_one({"_id": candidate_id})
-            if product:
-                break
+        if isinstance(product_id, str) and product_id.startswith("checksum:"):
+            checksum = product_id.split(":", 1)[1]
+            product = products.find_one({"checksum": checksum})
+        else:
+            query_ids: list[Any] = []
+            if isinstance(product_id, str) and ObjectId.is_valid(product_id):
+                query_ids.append(ObjectId(product_id))
+            query_ids.append(product_id)
+
+            for candidate_id in query_ids:
+                product = products.find_one({"_id": candidate_id})
+                if product:
+                    break
         if not product:
             LOGGER.warning("Search candidate %s not found in Mongo", product_id)
             continue

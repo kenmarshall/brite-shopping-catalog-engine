@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-6">
+  <a href="/admin/products" class="text-sm text-brand hover:underline">&larr; Back to products</a>
+  <h2 class="mt-1 text-2xl font-bold">Add Product</h2>
+  <p class="mt-1 text-sm text-gray-500">Manual entry form for products or prices not currently covered by web scraping.</p>
+</div>
+
+{% if error %}
+<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+  {{ error }}
+</div>
+{% endif %}
+
+<form method="post" action="/admin/products/new" class="max-w-3xl space-y-4 rounded-xl bg-white p-5 shadow">
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+    <div>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Store ID</label>
+      <select name="store_id" required class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+        <option value="">Select store source...</option>
+        {% for source in sources %}
+        <option value="{{ source.source_id }}">{{ source.display_name }} ({{ source.source_id }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Store Name (optional override)</label>
+      <input name="store_name" placeholder="Auto-filled from selected source" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    </div>
+  </div>
+
+  <div>
+    <label class="mb-1 block text-sm font-medium text-gray-700">Product Name</label>
+    <input name="name" required placeholder="e.g. Grace Coconut Milk 400ml" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+  </div>
+
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <div>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Price (optional)</label>
+      <input name="price" type="number" step="0.01" min="0" placeholder="0.00" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Currency</label>
+      <input name="currency" value="JMD" maxlength="3" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm uppercase focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Size Hint</label>
+      <input name="size_hint" placeholder="e.g. 400ml" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+    <div>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Brand</label>
+      <input name="brand" placeholder="e.g. Grace" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Category</label>
+      <input name="category" placeholder="e.g. Canned Goods" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    </div>
+  </div>
+
+  <div>
+    <label class="mb-1 block text-sm font-medium text-gray-700">Product URL (optional)</label>
+    <input name="url" placeholder="https://..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+  </div>
+
+  <div>
+    <label class="mb-1 block text-sm font-medium text-gray-700">Image URL (optional)</label>
+    <input name="image_url" placeholder="https://..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+  </div>
+
+  <div class="pt-2">
+    <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
+      Save Product
+    </button>
+  </div>
+</form>
+{% endblock %}

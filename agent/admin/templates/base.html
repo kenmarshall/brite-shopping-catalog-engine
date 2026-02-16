@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ page_title | default("Admin") }} - Brite Shopping Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <link rel="stylesheet" href="/admin/static/admin.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: '#0a7ea4', light: '#4dc9f6', dark: '#07556f' },
+            panel: '#f5f8fa',
+          },
+        },
+      },
+    };
+  </script>
+</head>
+<body class="min-h-full bg-panel text-gray-900 antialiased">
+  <div class="min-h-screen md:flex">
+    <aside class="hidden md:flex w-64 flex-col bg-gray-900 text-gray-300">
+      <div class="px-5 py-5 border-b border-gray-700">
+        <h1 class="text-lg font-bold text-white">Brite Admin</h1>
+        <p class="text-xs text-gray-500 mt-1">Catalog Engine</p>
+      </div>
+      <nav class="flex-1 py-4 space-y-1">
+        <a href="/admin/" class="admin-nav-link {% if active_nav == 'dashboard' %}admin-nav-link-active{% endif %}">
+          <span class="mr-2">&#9632;</span> Dashboard
+        </a>
+        <a href="/admin/products" class="admin-nav-link {% if active_nav == 'products' %}admin-nav-link-active{% endif %}">
+          <span class="mr-2">&#9642;</span> Products
+        </a>
+        <a href="/admin/stores" class="admin-nav-link {% if active_nav == 'stores' %}admin-nav-link-active{% endif %}">
+          <span class="mr-2">&#9643;</span> Stores
+        </a>
+        <a href="/admin/scrapes" class="admin-nav-link {% if active_nav == 'scrapes' %}admin-nav-link-active{% endif %}">
+          <span class="mr-2">&#9654;</span> Scrapes
+        </a>
+        <a href="/admin/curator" class="admin-nav-link {% if active_nav == 'curator' %}admin-nav-link-active{% endif %}">
+          <span class="mr-2">&#10024;</span> AI Curator
+        </a>
+      </nav>
+      <div class="px-5 py-3 border-t border-gray-700 text-xs text-gray-500">Local Admin Console</div>
+    </aside>
+
+    <div class="flex-1 min-w-0">
+      <header class="md:hidden sticky top-0 z-10 bg-gray-900 text-white border-b border-gray-700">
+        <div class="px-4 py-3">
+          <div class="text-sm font-semibold">Brite Admin</div>
+          <div class="mt-2 flex gap-2 overflow-x-auto text-xs pb-1">
+            <a href="/admin/" class="admin-mobile-link {% if active_nav == 'dashboard' %}admin-mobile-link-active{% endif %}">Dashboard</a>
+            <a href="/admin/products" class="admin-mobile-link {% if active_nav == 'products' %}admin-mobile-link-active{% endif %}">Products</a>
+            <a href="/admin/stores" class="admin-mobile-link {% if active_nav == 'stores' %}admin-mobile-link-active{% endif %}">Stores</a>
+            <a href="/admin/scrapes" class="admin-mobile-link {% if active_nav == 'scrapes' %}admin-mobile-link-active{% endif %}">Scrapes</a>
+            <a href="/admin/curator" class="admin-mobile-link {% if active_nav == 'curator' %}admin-mobile-link-active{% endif %}">Curator</a>
+          </div>
+        </div>
+      </header>
+
+      <main class="px-4 py-5 md:px-8 md:py-7">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

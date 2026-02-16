@@ -467,6 +467,92 @@ def login_session(
     typer.echo(f"You can now run: python -m agent.cli scrape --store-id {store_id}")
 
 
+@app.command(name="dedup-audit")
+def dedup_audit(
+    threshold: float = typer.Option(0.90, "--threshold", help="Embedding similarity threshold"),
+    limit: int = typer.Option(100, "--limit", help="Max potential duplicates to report"),
+    dry_run: bool = typer.Option(True, "--dry-run/--merge", help="Preview only (default) or merge duplicates"),
+) -> None:
+    """Find potential duplicate products across stores using embedding similarity."""
+    mongo = MongoService()
+    index = FaissIndex()
+
+    if index.index is None:
+        typer.echo("FAISS index not loaded. Run 'reindex' first.", err=True)
+        raise typer.Exit(1)
+
+    products = mongo.list_products({"embedding": {"$ne": None}})
+    typer.echo(f"Checking {len(products)} products for near-duplicates (threshold={threshold})...")
+
+    # Build lookup maps
+    id_to_doc = {str(doc["_id"]): doc for doc in products}
+    seen_pairs: set[tuple[str, str]] = set()
+    duplicates: list[dict] = []
+
+    for doc in products:
+        doc_id = str(doc["_id"])
+        embedding = doc.get("embedding")
+        if not embedding:
+            continue
+
+        candidates = index.search(embedding, k=5)
+        for cand_id, score in candidates:
+            if cand_id == doc_id:
+                continue
+            if score < threshold:
+                continue
+
+            # Ensure consistent pair ordering to avoid reporting A-B and B-A
+            pair = tuple(sorted([doc_id, cand_id]))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+
+            cand_doc = id_to_doc.get(cand_id)
+            if not cand_doc:
+                continue
+
+            # Only flag cross-store duplicates (same store dedup is handled by checksum)
+            if doc.get("store_id") == cand_doc.get("store_id"):
+                continue
+
+            # Skip if they already share a match_key (already merged)
+            if doc.get("match_key") and doc.get("match_key") == cand_doc.get("match_key"):
+                continue
+
+            duplicates.append({
+                "score": round(score, 4),
+                "product_a": {
+                    "id": doc_id,
+                    "name": doc.get("name", ""),
+                    "store": doc.get("store_name", ""),
+                    "match_key": doc.get("match_key", "")[:12],
+                },
+                "product_b": {
+                    "id": cand_id,
+                    "name": cand_doc.get("name", ""),
+                    "store": cand_doc.get("store_name", ""),
+                    "match_key": cand_doc.get("match_key", "")[:12],
+                },
+            })
+
+            if len(duplicates) >= limit:
+                break
+        if len(duplicates) >= limit:
+            break
+
+    typer.echo(f"\nFound {len(duplicates)} potential cross-store duplicates:\n")
+    for dup in duplicates:
+        a = dup["product_a"]
+        b = dup["product_b"]
+        typer.echo(f"  [{dup['score']:.2f}] {a['name'][:45]:45s} ({a['store']})")
+        typer.echo(f"         {b['name'][:45]:45s} ({b['store']})")
+        typer.echo()
+
+    if not dry_run and duplicates:
+        typer.echo("Merge mode not yet implemented. Use the admin dashboard to review and merge.")
+
+
 def main() -> None:
     app()
 

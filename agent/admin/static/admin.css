@@ -1,0 +1,40 @@
+.admin-nav-link {
+  display: flex;
+  align-items: center;
+  padding: 0.55rem 1.25rem;
+  font-size: 0.875rem;
+  color: rgb(209 213 219);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.admin-nav-link:hover {
+  background: rgb(31 41 55);
+  color: rgb(255 255 255);
+}
+
+.admin-nav-link-active {
+  background: rgb(31 41 55);
+  color: rgb(255 255 255);
+  font-weight: 600;
+}
+
+.admin-mobile-link {
+  white-space: nowrap;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(75 85 99);
+  padding: 0.3rem 0.65rem;
+  color: rgb(229 231 235);
+}
+
+.admin-mobile-link-active {
+  border-color: rgb(77 201 246);
+  background: rgb(7 85 111);
+  color: rgb(255 255 255);
+}
+
+code {
+  border-radius: 0.25rem;
+  background: rgb(243 244 246);
+  padding: 0.1rem 0.35rem;
+  font-size: 0.75rem;
+}
