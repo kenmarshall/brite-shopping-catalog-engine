@@ -68,8 +68,34 @@
 <div class="mt-6 space-y-6">
   <section class="rounded-xl bg-white shadow">
     <div class="border-b px-5 py-4">
-      <h3 class="text-lg font-semibold">Manually Flagged Merge Candidates</h3>
-      <p class="mt-1 text-xs text-gray-500">Flag products from Product Search, then merge or clear clusters here.</p>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 class="text-lg font-semibold">Manually Flagged Merge Candidates</h3>
+          <p class="mt-1 text-xs text-gray-500">Flag products from Product Search, then merge or clear clusters here.</p>
+        </div>
+        <div class="inline-flex items-center gap-2">
+          <form method="post" action="/admin/curator/flags/merge-all" class="curator-action-form inline">
+            <input type="hidden" name="limit" value="{{ limit }}">
+            <button
+              type="submit"
+              class="rounded-md border border-brand/30 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand hover:bg-brand/20"
+              data-loading-text="Merging..."
+            >
+              Merge All
+            </button>
+          </form>
+          <form method="post" action="/admin/curator/flags/clear-all" class="curator-action-form inline">
+            <input type="hidden" name="limit" value="{{ limit }}">
+            <button
+              type="submit"
+              class="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+              data-loading-text="Clearing..."
+            >
+              Clear All Flags
+            </button>
+          </form>
+        </div>
+      </div>
     </div>
     <div class="overflow-x-auto">
       <table class="min-w-full text-sm">
@@ -133,7 +159,19 @@
 
   <section class="rounded-xl bg-white shadow">
     <div class="border-b px-5 py-4">
-      <h3 class="text-lg font-semibold">Potential Merge Misses (Match Key Conflicts)</h3>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-lg font-semibold">Potential Merge Misses (Match Key Conflicts)</h3>
+        <form method="post" action="/admin/curator/merge-all" class="curator-action-form inline">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button
+            type="submit"
+            class="rounded-md border border-brand/30 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand hover:bg-brand/20"
+            data-loading-text="Merging..."
+          >
+            Merge All
+          </button>
+        </form>
+      </div>
     </div>
     <div class="overflow-x-auto">
       <table class="min-w-full text-sm">
@@ -186,7 +224,19 @@
 
   <section class="rounded-xl bg-white shadow">
     <div class="border-b px-5 py-4">
-      <h3 class="text-lg font-semibold">Brand Conflicts</h3>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-lg font-semibold">Brand Conflicts</h3>
+        <form method="post" action="/admin/curator/normalize-brand-all" class="curator-action-form inline">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button
+            type="submit"
+            class="rounded-md border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+            data-loading-text="Normalizing..."
+          >
+            Normalize All
+          </button>
+        </form>
+      </div>
     </div>
     <div class="overflow-x-auto">
       <table class="min-w-full text-sm">
@@ -236,7 +286,19 @@
 
   <section class="rounded-xl bg-white shadow">
     <div class="border-b px-5 py-4">
-      <h3 class="text-lg font-semibold">Category Conflicts</h3>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-lg font-semibold">Category Conflicts</h3>
+        <form method="post" action="/admin/curator/normalize-category-all" class="curator-action-form inline">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button
+            type="submit"
+            class="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+            data-loading-text="Normalizing..."
+          >
+            Normalize All
+          </button>
+        </form>
+      </div>
     </div>
     <div class="overflow-x-auto">
       <table class="min-w-full text-sm">
@@ -286,8 +348,22 @@
 
   <section class="rounded-xl bg-white shadow">
     <div class="border-b px-5 py-4">
-      <h3 class="text-lg font-semibold">Name and Size Normalization Candidates</h3>
-      <p class="mt-1 text-xs text-gray-500">Fixes mixed casing, strips size tokens from names, and syncs parsed size metadata.</p>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 class="text-lg font-semibold">Name and Size Normalization Candidates</h3>
+          <p class="mt-1 text-xs text-gray-500">Fixes mixed casing, strips size tokens from names, and syncs parsed size metadata.</p>
+        </div>
+        <form method="post" action="/admin/curator/normalize-name-size-all" class="curator-action-form inline">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button
+            type="submit"
+            class="rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+            data-loading-text="Normalizing..."
+          >
+            Normalize All
+          </button>
+        </form>
+      </div>
     </div>
     <div class="overflow-x-auto">
       <table class="min-w-full text-sm">
@@ -346,8 +422,25 @@
 
   <section class="rounded-xl bg-white shadow">
     <div class="border-b px-5 py-4">
-      <h3 class="text-lg font-semibold">Missing Photo Queue</h3>
-      <p class="mt-1 text-xs text-gray-500">Use this list to prioritize image uploads or sourcing for products without photos.</p>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 class="text-lg font-semibold">Missing Photo Queue</h3>
+          <p class="mt-1 text-xs text-gray-500">Use this list to prioritize image uploads or sourcing for products without photos.</p>
+        </div>
+        <div class="inline-flex items-center gap-2">
+          <form method="post" action="/admin/curator/photos/queue-all" class="curator-action-form inline">
+            <input type="hidden" name="limit" value="{{ limit }}">
+            <button
+              type="submit"
+              class="rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100"
+              data-loading-text="Queueing..."
+            >
+              Queue All Missing
+            </button>
+          </form>
+          <a href="/admin/products?photo=missing" class="text-xs text-brand hover:underline">Open in Products</a>
+        </div>
+      </div>
     </div>
     <div class="overflow-x-auto">
       <table class="min-w-full text-sm">
@@ -371,7 +464,12 @@
               {{ row.brand or '—' }} / {{ row.category or '—' }}
             </td>
             <td class="px-4 py-3 text-right">
-              <a href="/admin/products/{{ row._id }}" class="text-xs text-brand hover:underline">Add Photo</a>
+              <div class="inline-flex items-center gap-2">
+                {% if row._photo_upload_needed %}
+                <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">queued</span>
+                {% endif %}
+                <a href="/admin/products/{{ row._id }}" class="text-xs text-brand hover:underline">Add Photo</a>
+              </div>
             </td>
           </tr>
           {% endfor %}

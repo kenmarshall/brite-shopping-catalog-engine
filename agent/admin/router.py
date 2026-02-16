@@ -436,6 +436,7 @@ def _collect_missing_photo_candidates(
                 "category": 1,
                 "normalized_name": 1,
                 "updated_at": 1,
+                "curator.photo_upload_needed": 1,
             },
         )
         .sort("updated_at", -1)
@@ -443,6 +444,8 @@ def _collect_missing_photo_candidates(
     )
     for doc in docs:
         doc["_id"] = str(doc["_id"])
+        curator_meta = doc.get("curator") or {}
+        doc["_photo_upload_needed"] = bool(curator_meta.get("photo_upload_needed"))
     return docs, total_missing
 
 
@@ -534,6 +537,297 @@ def _dominant_size(docs: list[dict[str, Any]]) -> SizeInfo:
         return _size_info_from_doc(docs[0]) if docs else SizeInfo()
     winner = max(counts.items(), key=lambda item: item[1])[0]
     return SizeInfo(value=winner[0], unit=winner[1], pack_count=winner[2])
+
+
+def _execute_merge_cluster(mongo: MongoService, key: str) -> dict[str, Any]:
+    docs = _cluster_products(mongo, key)
+    if len(docs) < 2:
+        raise ValueError("Cluster has fewer than 2 products, nothing to merge")
+
+    before_docs = _snapshot_docs(docs)
+    docs_sorted = sorted(
+        docs,
+        key=lambda item: (
+            len(item.get("location_prices") or []),
+            1 if item.get("estimated_price") is not None else 0,
+            item.get("updated_at") or datetime.min,
+        ),
+        reverse=True,
+    )
+    canonical = docs_sorted[0]
+    duplicates = docs_sorted[1:]
+
+    dominant_brand = normalize_brand(_dominant_text_value(docs_sorted, "brand"))
+    dominant_category = normalize_category(_dominant_text_value(docs_sorted, "category"))
+    dominant_size = _dominant_size(docs_sorted)
+
+    merged_prices = list(canonical.get("location_prices") or [])
+    merged_tags = _non_empty(canonical.get("tags") or [])
+    tag_keys = {tag.lower() for tag in merged_tags}
+    merged_aliases = _non_empty(canonical.get("aliases") or [])
+    alias_keys = {alias.lower() for alias in merged_aliases}
+
+    canonical_name = str(canonical.get("name") or "").strip()
+    image_url = canonical.get("image_url")
+    url = canonical.get("url")
+
+    for duplicate in duplicates:
+        merged_prices = _merge_location_prices(
+            merged_prices,
+            duplicate.get("location_prices") or [],
+        )
+        duplicate_name = str(duplicate.get("name") or "").strip()
+        if duplicate_name and duplicate_name.lower() != canonical_name.lower():
+            if duplicate_name.lower() not in alias_keys:
+                merged_aliases.append(duplicate_name)
+                alias_keys.add(duplicate_name.lower())
+        for tag in _non_empty(duplicate.get("tags") or []):
+            lower_tag = tag.lower()
+            if lower_tag not in tag_keys:
+                merged_tags.append(tag)
+                tag_keys.add(lower_tag)
+        if not image_url and duplicate.get("image_url"):
+            image_url = duplicate.get("image_url")
+        if (not url or str(url).startswith("manual://")) and duplicate.get("url"):
+            url = duplicate.get("url")
+
+    if dominant_category:
+        dominant_category_tag = dominant_category.lower()
+        if dominant_category_tag not in tag_keys:
+            merged_tags.append(dominant_category_tag)
+            tag_keys.add(dominant_category_tag)
+
+    updated_at = datetime.utcnow()
+    updates = {
+        "brand": dominant_brand,
+        "category": dominant_category,
+        "size": dominant_size.model_dump(),
+        "location_prices": merged_prices,
+        "estimated_price": _average_price(merged_prices),
+        "tags": merged_tags,
+        "aliases": merged_aliases,
+        "image_url": image_url,
+        "url": url,
+        "match_key": build_match_key(key, dominant_brand, dominant_size),
+        "checksum": build_checksum(
+            str(canonical.get("store_id") or "unknown"),
+            key,
+            dominant_brand,
+            dominant_size,
+        ),
+        "updated_at": updated_at,
+    }
+
+    mongo.products.update_one({"_id": canonical["_id"]}, {"$set": updates})
+    duplicate_ids = [item["_id"] for item in duplicates]
+    mongo.products.delete_many({"_id": {"$in": duplicate_ids}})
+    after_docs = _cluster_products(mongo, key)
+    action_id = _record_curator_action(
+        mongo,
+        action_type="merge_cluster",
+        normalized_name=key,
+        summary=(
+            f"Merged {len(before_docs)} products into canonical product "
+            f"'{canonical_name or key}'."
+        ),
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
+    return {
+        "docs": len(docs),
+        "duplicates_removed": len(duplicates),
+        "canonical_name": canonical_name or key,
+        "action_id": str(action_id),
+    }
+
+
+def _execute_normalize_brand_cluster(mongo: MongoService, key: str) -> dict[str, Any]:
+    docs = _cluster_products(mongo, key)
+    if len(docs) < 2:
+        raise ValueError("Cluster has fewer than 2 products, nothing to normalize")
+
+    before_docs = _snapshot_docs(docs)
+    dominant_brand = normalize_brand(_dominant_text_value(docs, "brand"))
+    if not dominant_brand:
+        raise ValueError("No non-empty brand found in cluster")
+
+    modified = 0
+    for doc in docs:
+        size = _size_info_from_doc(doc)
+        updates = {
+            "brand": dominant_brand,
+            "match_key": build_match_key(key, dominant_brand, size),
+            "checksum": build_checksum(
+                str(doc.get("store_id") or "unknown"),
+                key,
+                dominant_brand,
+                size,
+            ),
+            "updated_at": datetime.utcnow(),
+        }
+        result = mongo.products.update_one({"_id": doc["_id"]}, {"$set": updates})
+        modified += int(result.modified_count)
+
+    after_docs = _cluster_products(mongo, key)
+    action_id = _record_curator_action(
+        mongo,
+        action_type="normalize_brand",
+        normalized_name=key,
+        summary=(
+            f"Normalized brand to '{dominant_brand}' for "
+            f"{len(before_docs)} products."
+        ),
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
+    return {
+        "docs": len(docs),
+        "updated": modified,
+        "dominant_brand": dominant_brand,
+        "action_id": str(action_id),
+    }
+
+
+def _execute_normalize_category_cluster(mongo: MongoService, key: str) -> dict[str, Any]:
+    docs = _cluster_products(mongo, key)
+    if len(docs) < 2:
+        raise ValueError("Cluster has fewer than 2 products, nothing to normalize")
+
+    before_docs = _snapshot_docs(docs)
+    dominant_category = normalize_category(_dominant_text_value(docs, "category"))
+    if not dominant_category:
+        raise ValueError("No non-empty category found in cluster")
+
+    category_tag = dominant_category.lower()
+    modified = 0
+    for doc in docs:
+        tags = _non_empty(doc.get("tags") or [])
+        lower_tags = {tag.lower() for tag in tags}
+        if category_tag not in lower_tags:
+            tags.append(category_tag)
+        updates = {
+            "category": dominant_category,
+            "tags": tags,
+            "updated_at": datetime.utcnow(),
+        }
+        result = mongo.products.update_one({"_id": doc["_id"]}, {"$set": updates})
+        modified += int(result.modified_count)
+
+    after_docs = _cluster_products(mongo, key)
+    action_id = _record_curator_action(
+        mongo,
+        action_type="normalize_category",
+        normalized_name=key,
+        summary=(
+            f"Normalized category to '{dominant_category}' for "
+            f"{len(before_docs)} products."
+        ),
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
+    return {
+        "docs": len(docs),
+        "updated": modified,
+        "dominant_category": dominant_category,
+        "action_id": str(action_id),
+    }
+
+
+def _execute_normalize_name_size_product(
+    mongo: MongoService,
+    oid: ObjectId,
+) -> dict[str, Any]:
+    doc = mongo.products.find_one({"_id": oid})
+    if not doc:
+        raise ValueError("Product not found")
+
+    before_docs = _snapshot_docs([doc])
+    original_name = str(doc.get("name") or "").strip()
+    if not original_name:
+        raise ValueError("Product has no name to normalize")
+
+    cleaned_name = _cleanup_name_suggestion(original_name)
+    normalized_name = normalize_name(cleaned_name)
+    existing_size = _size_info_from_doc(doc)
+    inferred_size = parse_size(original_name)
+    if (
+        inferred_size.value is not None
+        or inferred_size.unit is not None
+        or inferred_size.pack_count
+    ):
+        final_size = inferred_size
+    else:
+        final_size = existing_size
+
+    normalized_brand = normalize_brand(str(doc.get("brand") or "").strip() or None)
+    updates = {
+        "name": cleaned_name,
+        "normalized_name": normalized_name,
+        "size": final_size.model_dump(),
+        "match_key": build_match_key(normalized_name, normalized_brand, final_size),
+        "checksum": build_checksum(
+            str(doc.get("store_id") or "unknown"),
+            normalized_name,
+            normalized_brand,
+            final_size,
+        ),
+        "updated_at": datetime.utcnow(),
+    }
+    mongo.products.update_one({"_id": oid}, {"$set": updates})
+
+    after_docs = list(mongo.products.find({"_id": oid}))
+    action_id = _record_curator_action(
+        mongo,
+        action_type="normalize_name_size",
+        normalized_name=normalized_name,
+        summary=(
+            f"Normalized name to '{cleaned_name}' and refreshed size "
+            f"({_format_size(final_size)})."
+        ),
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
+    return {
+        "original_name": original_name,
+        "cleaned_name": cleaned_name,
+        "size_label": _format_size(final_size),
+        "action_id": str(action_id),
+        "normalized_name": normalized_name,
+    }
+
+
+def _execute_clear_manual_flags_cluster(mongo: MongoService, key: str) -> dict[str, Any]:
+    docs = list(
+        mongo.products.find(
+            {"normalized_name": key, "curator.manual_merge_flag": True}
+        )
+    )
+    if not docs:
+        raise ValueError("No manual flags found for that cluster")
+
+    before_docs = _snapshot_docs(docs)
+    ids = [doc["_id"] for doc in docs]
+    mongo.products.update_many(
+        {"_id": {"$in": ids}},
+        {
+            "$unset": {
+                "curator.manual_merge_flag": "",
+                "curator.manual_merge_note": "",
+                "curator.flagged_at": "",
+            },
+            "$set": {"updated_at": datetime.utcnow()},
+        },
+    )
+    after_docs = list(mongo.products.find({"_id": {"$in": ids}}))
+    action_id = _record_curator_action(
+        mongo,
+        action_type="clear_manual_flags",
+        normalized_name=key,
+        summary=f"Cleared manual merge flags from {len(ids)} products.",
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
+    return {"cleared": len(ids), "action_id": str(action_id)}
 
 
 # ---- Dashboard ----
@@ -1213,105 +1507,15 @@ async def curator_merge_cluster(
     if not key:
         msg = quote_plus("Invalid cluster name")
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-
-    docs = _cluster_products(mongo, key)
-    if len(docs) < 2:
-        msg = quote_plus("Cluster has fewer than 2 products, nothing to merge")
+    try:
+        result = _execute_merge_cluster(mongo, key)
+    except ValueError as exc:
+        msg = quote_plus(str(exc))
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-    before_docs = _snapshot_docs(docs)
-
-    docs_sorted = sorted(
-        docs,
-        key=lambda item: (
-            len(item.get("location_prices") or []),
-            1 if item.get("estimated_price") is not None else 0,
-            item.get("updated_at") or datetime.min,
-        ),
-        reverse=True,
-    )
-    canonical = docs_sorted[0]
-    duplicates = docs_sorted[1:]
-
-    dominant_brand = normalize_brand(_dominant_text_value(docs_sorted, "brand"))
-    dominant_category = normalize_category(_dominant_text_value(docs_sorted, "category"))
-    dominant_size = _dominant_size(docs_sorted)
-
-    merged_prices = list(canonical.get("location_prices") or [])
-    merged_tags = _non_empty(canonical.get("tags") or [])
-    tag_keys = {tag.lower() for tag in merged_tags}
-    merged_aliases = _non_empty(canonical.get("aliases") or [])
-    alias_keys = {alias.lower() for alias in merged_aliases}
-
-    canonical_name = str(canonical.get("name") or "").strip()
-    image_url = canonical.get("image_url")
-    url = canonical.get("url")
-
-    for duplicate in duplicates:
-        merged_prices = _merge_location_prices(
-            merged_prices,
-            duplicate.get("location_prices") or [],
-        )
-        duplicate_name = str(duplicate.get("name") or "").strip()
-        if duplicate_name and duplicate_name.lower() != canonical_name.lower():
-            if duplicate_name.lower() not in alias_keys:
-                merged_aliases.append(duplicate_name)
-                alias_keys.add(duplicate_name.lower())
-        for tag in _non_empty(duplicate.get("tags") or []):
-            lower_tag = tag.lower()
-            if lower_tag not in tag_keys:
-                merged_tags.append(tag)
-                tag_keys.add(lower_tag)
-        if not image_url and duplicate.get("image_url"):
-            image_url = duplicate.get("image_url")
-        if (not url or str(url).startswith("manual://")) and duplicate.get("url"):
-            url = duplicate.get("url")
-
-    if dominant_category:
-        dominant_category_tag = dominant_category.lower()
-        if dominant_category_tag not in tag_keys:
-            merged_tags.append(dominant_category_tag)
-            tag_keys.add(dominant_category_tag)
-
-    updated_at = datetime.utcnow()
-    updates = {
-        "brand": dominant_brand,
-        "category": dominant_category,
-        "size": dominant_size.model_dump(),
-        "location_prices": merged_prices,
-        "estimated_price": _average_price(merged_prices),
-        "tags": merged_tags,
-        "aliases": merged_aliases,
-        "image_url": image_url,
-        "url": url,
-        "match_key": build_match_key(key, dominant_brand, dominant_size),
-        "checksum": build_checksum(
-            str(canonical.get("store_id") or "unknown"),
-            key,
-            dominant_brand,
-            dominant_size,
-        ),
-        "updated_at": updated_at,
-    }
-
-    mongo.products.update_one({"_id": canonical["_id"]}, {"$set": updates})
-    duplicate_ids = [item["_id"] for item in duplicates]
-    mongo.products.delete_many({"_id": {"$in": duplicate_ids}})
-    after_docs = _cluster_products(mongo, key)
-    action_id = _record_curator_action(
-        mongo,
-        action_type="merge_cluster",
-        normalized_name=key,
-        summary=(
-            f"Merged {len(before_docs)} products into canonical product "
-            f"'{canonical_name or key}'."
-        ),
-        before_docs=before_docs,
-        after_docs=after_docs,
-    )
 
     msg = quote_plus(
-        f"Merged {len(docs)} products for '{canonical_name or key}'. "
-        f"Removed {len(duplicates)} duplicates. Action #{action_id}."
+        f"Merged {result['docs']} products for '{result['canonical_name']}'. "
+        f"Removed {result['duplicates_removed']} duplicates. Action #{result['action_id']}."
     )
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
@@ -1326,50 +1530,15 @@ async def curator_normalize_brand(
     if not key:
         msg = quote_plus("Invalid cluster name")
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-
-    docs = _cluster_products(mongo, key)
-    if len(docs) < 2:
-        msg = quote_plus("Cluster has fewer than 2 products, nothing to normalize")
+    try:
+        result = _execute_normalize_brand_cluster(mongo, key)
+    except ValueError as exc:
+        msg = quote_plus(str(exc))
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-    before_docs = _snapshot_docs(docs)
-
-    dominant_brand = normalize_brand(_dominant_text_value(docs, "brand"))
-    if not dominant_brand:
-        msg = quote_plus("No non-empty brand found in cluster")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-
-    modified = 0
-    for doc in docs:
-        size = _size_info_from_doc(doc)
-        updates = {
-            "brand": dominant_brand,
-            "match_key": build_match_key(key, dominant_brand, size),
-            "checksum": build_checksum(
-                str(doc.get("store_id") or "unknown"),
-                key,
-                dominant_brand,
-                size,
-            ),
-            "updated_at": datetime.utcnow(),
-        }
-        result = mongo.products.update_one({"_id": doc["_id"]}, {"$set": updates})
-        modified += int(result.modified_count)
-    after_docs = _cluster_products(mongo, key)
-    action_id = _record_curator_action(
-        mongo,
-        action_type="normalize_brand",
-        normalized_name=key,
-        summary=(
-            f"Normalized brand to '{dominant_brand}' for "
-            f"{len(before_docs)} products."
-        ),
-        before_docs=before_docs,
-        after_docs=after_docs,
-    )
 
     msg = quote_plus(
-        f"Normalized brand to '{dominant_brand}' for {len(docs)} products "
-        f"({modified} updated). Action #{action_id}."
+        f"Normalized brand to '{result['dominant_brand']}' for {result['docs']} products "
+        f"({result['updated']} updated). Action #{result['action_id']}."
     )
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
@@ -1384,48 +1553,15 @@ async def curator_normalize_category(
     if not key:
         msg = quote_plus("Invalid cluster name")
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-
-    docs = _cluster_products(mongo, key)
-    if len(docs) < 2:
-        msg = quote_plus("Cluster has fewer than 2 products, nothing to normalize")
+    try:
+        result = _execute_normalize_category_cluster(mongo, key)
+    except ValueError as exc:
+        msg = quote_plus(str(exc))
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-    before_docs = _snapshot_docs(docs)
-
-    dominant_category = normalize_category(_dominant_text_value(docs, "category"))
-    if not dominant_category:
-        msg = quote_plus("No non-empty category found in cluster")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-
-    category_tag = dominant_category.lower()
-    modified = 0
-    for doc in docs:
-        tags = _non_empty(doc.get("tags") or [])
-        lower_tags = {tag.lower() for tag in tags}
-        if category_tag not in lower_tags:
-            tags.append(category_tag)
-        updates = {
-            "category": dominant_category,
-            "tags": tags,
-            "updated_at": datetime.utcnow(),
-        }
-        result = mongo.products.update_one({"_id": doc["_id"]}, {"$set": updates})
-        modified += int(result.modified_count)
-    after_docs = _cluster_products(mongo, key)
-    action_id = _record_curator_action(
-        mongo,
-        action_type="normalize_category",
-        normalized_name=key,
-        summary=(
-            f"Normalized category to '{dominant_category}' for "
-            f"{len(before_docs)} products."
-        ),
-        before_docs=before_docs,
-        after_docs=after_docs,
-    )
 
     msg = quote_plus(
-        f"Normalized category to '{dominant_category}' for {len(docs)} products "
-        f"({modified} updated). Action #{action_id}."
+        f"Normalized category to '{result['dominant_category']}' for {result['docs']} products "
+        f"({result['updated']} updated). Action #{result['action_id']}."
     )
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
@@ -1441,62 +1577,15 @@ async def curator_normalize_name_size(
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
 
     mongo = _get_mongo()
-    doc = mongo.products.find_one({"_id": oid})
-    if not doc:
-        msg = quote_plus("Product not found")
+    try:
+        result = _execute_normalize_name_size_product(mongo, oid)
+    except ValueError as exc:
+        msg = quote_plus(str(exc))
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-
-    before_docs = _snapshot_docs([doc])
-    original_name = str(doc.get("name") or "").strip()
-    if not original_name:
-        msg = quote_plus("Product has no name to normalize")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
-
-    cleaned_name = _cleanup_name_suggestion(original_name)
-    normalized_name = normalize_name(cleaned_name)
-    existing_size = _size_info_from_doc(doc)
-    inferred_size = parse_size(original_name)
-    if (
-        inferred_size.value is not None
-        or inferred_size.unit is not None
-        or inferred_size.pack_count
-    ):
-        final_size = inferred_size
-    else:
-        final_size = existing_size
-
-    normalized_brand = normalize_brand(str(doc.get("brand") or "").strip() or None)
-    updates = {
-        "name": cleaned_name,
-        "normalized_name": normalized_name,
-        "size": final_size.model_dump(),
-        "match_key": build_match_key(normalized_name, normalized_brand, final_size),
-        "checksum": build_checksum(
-            str(doc.get("store_id") or "unknown"),
-            normalized_name,
-            normalized_brand,
-            final_size,
-        ),
-        "updated_at": datetime.utcnow(),
-    }
-    mongo.products.update_one({"_id": oid}, {"$set": updates})
-
-    after_docs = list(mongo.products.find({"_id": oid}))
-    action_id = _record_curator_action(
-        mongo,
-        action_type="normalize_name_size",
-        normalized_name=normalized_name,
-        summary=(
-            f"Normalized name to '{cleaned_name}' and refreshed size "
-            f"({_format_size(final_size)})."
-        ),
-        before_docs=before_docs,
-        after_docs=after_docs,
-    )
 
     msg = quote_plus(
-        f"Normalized '{original_name}' -> '{cleaned_name}'. "
-        f"Size now {_format_size(final_size)}. Action #{action_id}."
+        f"Normalized '{result['original_name']}' -> '{result['cleaned_name']}'. "
+        f"Size now {result['size_label']}. Action #{result['action_id']}."
     )
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
@@ -1512,39 +1601,247 @@ async def curator_clear_manual_flags(
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
 
     mongo = _get_mongo()
-    docs = list(
-        mongo.products.find(
-            {"normalized_name": key, "curator.manual_merge_flag": True}
-        )
-    )
-    if not docs:
-        msg = quote_plus("No manual flags found for that cluster")
+    try:
+        result = _execute_clear_manual_flags_cluster(mongo, key)
+    except ValueError as exc:
+        msg = quote_plus(str(exc))
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
 
-    before_docs = _snapshot_docs(docs)
-    ids = [doc["_id"] for doc in docs]
-    mongo.products.update_many(
-        {"_id": {"$in": ids}},
-        {
-            "$unset": {
-                "curator.manual_merge_flag": "",
-                "curator.manual_merge_note": "",
-                "curator.flagged_at": "",
-            },
-            "$set": {"updated_at": datetime.utcnow()},
-        },
+    msg = quote_plus(
+        f"Cleared {result['cleared']} manual flags for '{key}'. Action #{result['action_id']}."
     )
-    after_docs = list(mongo.products.find({"_id": {"$in": ids}}))
-    action_id = _record_curator_action(
-        mongo,
-        action_type="clear_manual_flags",
-        normalized_name=key,
-        summary=f"Cleared manual merge flags from {len(ids)} products.",
-        before_docs=before_docs,
-        after_docs=after_docs,
-    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
-    msg = quote_plus(f"Cleared {len(ids)} manual flags for '{key}'. Action #{action_id}.")
+
+@router.post("/curator/merge-all", response_class=HTMLResponse)
+async def curator_merge_all(limit: int = Form(25)):
+    mongo = _get_mongo()
+    _, _, match_key_conflicts = _collect_curator_conflicts(mongo, top_k=5000)
+    keys = [str(row.get("normalized_name") or "").strip() for row in match_key_conflicts]
+    keys = [key for key in keys if key]
+    if not keys:
+        msg = quote_plus("No match-key conflicts available to merge")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    merged_clusters = 0
+    merged_docs = 0
+    removed_docs = 0
+    skipped = 0
+    for key in keys:
+        try:
+            result = _execute_merge_cluster(mongo, key)
+        except ValueError:
+            skipped += 1
+            continue
+        merged_clusters += 1
+        merged_docs += int(result["docs"])
+        removed_docs += int(result["duplicates_removed"])
+
+    if merged_clusters == 0:
+        msg = quote_plus("No clusters were eligible for merge-all")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    msg = quote_plus(
+        f"Merged {merged_clusters} match-key clusters ({merged_docs} docs, "
+        f"removed {removed_docs}, skipped {skipped})."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/flags/merge-all", response_class=HTMLResponse)
+async def curator_merge_all_flagged(limit: int = Form(25)):
+    mongo = _get_mongo()
+    flagged_clusters, _ = _collect_manual_merge_flags(mongo, top_k=5000)
+    keys = [str(row.get("normalized_name") or "").strip() for row in flagged_clusters]
+    keys = [key for key in keys if key]
+    if not keys:
+        msg = quote_plus("No manually flagged clusters available to merge")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    merged_clusters = 0
+    merged_docs = 0
+    removed_docs = 0
+    skipped = 0
+    for key in keys:
+        try:
+            result = _execute_merge_cluster(mongo, key)
+        except ValueError:
+            skipped += 1
+            continue
+        merged_clusters += 1
+        merged_docs += int(result["docs"])
+        removed_docs += int(result["duplicates_removed"])
+
+    if merged_clusters == 0:
+        msg = quote_plus("No manually flagged clusters were eligible to merge")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    msg = quote_plus(
+        f"Merged {merged_clusters} manually flagged clusters ({merged_docs} docs, "
+        f"removed {removed_docs}, skipped {skipped})."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/flags/clear-all", response_class=HTMLResponse)
+async def curator_clear_all_manual_flags(limit: int = Form(25)):
+    mongo = _get_mongo()
+    flagged_clusters, _ = _collect_manual_merge_flags(mongo, top_k=5000)
+    keys = [str(row.get("normalized_name") or "").strip() for row in flagged_clusters]
+    keys = [key for key in keys if key]
+    if not keys:
+        msg = quote_plus("No manual merge flags found to clear")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    cleared = 0
+    clusters = 0
+    skipped = 0
+    for key in keys:
+        try:
+            result = _execute_clear_manual_flags_cluster(mongo, key)
+        except ValueError:
+            skipped += 1
+            continue
+        clusters += 1
+        cleared += int(result["cleared"])
+
+    if clusters == 0:
+        msg = quote_plus("No manual flags were eligible to clear")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    msg = quote_plus(
+        f"Cleared {cleared} manual merge flags across {clusters} clusters "
+        f"(skipped {skipped})."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/normalize-brand-all", response_class=HTMLResponse)
+async def curator_normalize_brand_all(limit: int = Form(25)):
+    mongo = _get_mongo()
+    brand_conflicts, _, _ = _collect_curator_conflicts(mongo, top_k=5000)
+    keys = [str(row.get("normalized_name") or "").strip() for row in brand_conflicts]
+    keys = [key for key in keys if key]
+    if not keys:
+        msg = quote_plus("No brand conflicts found to normalize")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    clusters = 0
+    updated = 0
+    skipped = 0
+    for key in keys:
+        try:
+            result = _execute_normalize_brand_cluster(mongo, key)
+        except ValueError:
+            skipped += 1
+            continue
+        clusters += 1
+        updated += int(result["updated"])
+
+    if clusters == 0:
+        msg = quote_plus("No brand conflicts were eligible to normalize")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    msg = quote_plus(
+        f"Normalized brand labels across {clusters} clusters "
+        f"({updated} products updated, skipped {skipped})."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/normalize-category-all", response_class=HTMLResponse)
+async def curator_normalize_category_all(limit: int = Form(25)):
+    mongo = _get_mongo()
+    _, category_conflicts, _ = _collect_curator_conflicts(mongo, top_k=5000)
+    keys = [str(row.get("normalized_name") or "").strip() for row in category_conflicts]
+    keys = [key for key in keys if key]
+    if not keys:
+        msg = quote_plus("No category conflicts found to normalize")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    clusters = 0
+    updated = 0
+    skipped = 0
+    for key in keys:
+        try:
+            result = _execute_normalize_category_cluster(mongo, key)
+        except ValueError:
+            skipped += 1
+            continue
+        clusters += 1
+        updated += int(result["updated"])
+
+    if clusters == 0:
+        msg = quote_plus("No category conflicts were eligible to normalize")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    msg = quote_plus(
+        f"Normalized categories across {clusters} clusters "
+        f"({updated} products updated, skipped {skipped})."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/normalize-name-size-all", response_class=HTMLResponse)
+async def curator_normalize_name_size_all(limit: int = Form(25)):
+    mongo = _get_mongo()
+    candidates, _ = _collect_name_cleanup_candidates(mongo, top_k=200000)
+    product_ids = [row.get("product_id") for row in candidates if row.get("product_id")]
+    if not product_ids:
+        msg = quote_plus("No name/size cleanup candidates found")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    updated = 0
+    skipped = 0
+    for product_id in product_ids:
+        oid = _object_id_or_none(str(product_id))
+        if oid is None:
+            skipped += 1
+            continue
+        try:
+            _execute_normalize_name_size_product(mongo, oid)
+        except ValueError:
+            skipped += 1
+            continue
+        updated += 1
+
+    if updated == 0:
+        msg = quote_plus("No name/size candidates were eligible to normalize")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    msg = quote_plus(
+        f"Normalized names/sizes for {updated} products (skipped {skipped})."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/photos/queue-all", response_class=HTMLResponse)
+async def curator_queue_missing_photos(limit: int = Form(25)):
+    mongo = _get_mongo()
+    missing_photo_query = {
+        "$or": [
+            {"image_url": {"$in": [None, ""]}},
+            {"image_url": {"$regex": "^data:", "$options": "i"}},
+        ]
+    }
+    updates = {
+        "$set": {
+            "curator.photo_upload_needed": True,
+            "curator.photo_flagged_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        }
+    }
+    result = mongo.products.update_many(missing_photo_query, updates)
+    updated = int(getattr(result, "modified_count", 0))
+    matched = int(getattr(result, "matched_count", 0))
+    if matched == 0:
+        msg = quote_plus("No missing-photo products found to queue")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    msg = quote_plus(
+        f"Queued {updated} missing-photo products for upload triage "
+        f"({matched} matched)."
+    )
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
