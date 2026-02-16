@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import threading
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,42 @@ def _non_empty(values: list[Any]) -> list[str]:
         if text and text not in cleaned:
             cleaned.append(text)
     return cleaned
+
+
+def _snapshot_docs(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [deepcopy(doc) for doc in docs]
+
+
+def _record_curator_action(
+    mongo: MongoService,
+    *,
+    action_type: str,
+    normalized_name: str,
+    summary: str,
+    before_docs: list[dict[str, Any]],
+    after_docs: list[dict[str, Any]],
+) -> ObjectId:
+    payload = {
+        "action_type": action_type,
+        "normalized_name": normalized_name,
+        "summary": summary,
+        "status": "applied",
+        "before_count": len(before_docs),
+        "after_count": len(after_docs),
+        "before_docs": _snapshot_docs(before_docs),
+        "after_docs": _snapshot_docs(after_docs),
+        "created_at": datetime.utcnow(),
+        "undone_at": None,
+    }
+    result = mongo.curator_actions.insert_one(payload)
+    return result.inserted_id
+
+
+def _list_recent_curator_actions(mongo: MongoService, limit: int = 20) -> list[dict[str, Any]]:
+    actions = list(mongo.curator_actions.find().sort("created_at", -1).limit(limit))
+    for action in actions:
+        action["_id"] = str(action["_id"])
+    return actions
 
 
 def _collect_curator_conflicts(
@@ -763,6 +800,7 @@ async def curator_page(
         mongo,
         top_k=limit,
     )
+    recent_actions = _list_recent_curator_actions(mongo)
     return templates.TemplateResponse(
         "curator/list.html",
         {
@@ -770,6 +808,7 @@ async def curator_page(
             "brand_conflicts": brand_conflicts,
             "category_conflicts": category_conflicts,
             "match_key_conflicts": match_key_conflicts,
+            "recent_actions": recent_actions,
             "limit": limit,
             "message": message,
             "error": error,
@@ -794,6 +833,7 @@ async def curator_merge_cluster(
     if len(docs) < 2:
         msg = quote_plus("Cluster has fewer than 2 products, nothing to merge")
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+    before_docs = _snapshot_docs(docs)
 
     docs_sorted = sorted(
         docs,
@@ -871,10 +911,22 @@ async def curator_merge_cluster(
     mongo.products.update_one({"_id": canonical["_id"]}, {"$set": updates})
     duplicate_ids = [item["_id"] for item in duplicates]
     mongo.products.delete_many({"_id": {"$in": duplicate_ids}})
+    after_docs = _cluster_products(mongo, key)
+    action_id = _record_curator_action(
+        mongo,
+        action_type="merge_cluster",
+        normalized_name=key,
+        summary=(
+            f"Merged {len(before_docs)} products into canonical product "
+            f"'{canonical_name or key}'."
+        ),
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
 
     msg = quote_plus(
         f"Merged {len(docs)} products for '{canonical_name or key}'. "
-        f"Removed {len(duplicates)} duplicates."
+        f"Removed {len(duplicates)} duplicates. Action #{action_id}."
     )
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
@@ -894,6 +946,7 @@ async def curator_normalize_brand(
     if len(docs) < 2:
         msg = quote_plus("Cluster has fewer than 2 products, nothing to normalize")
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+    before_docs = _snapshot_docs(docs)
 
     dominant_brand = normalize_brand(_dominant_text_value(docs, "brand"))
     if not dominant_brand:
@@ -916,9 +969,22 @@ async def curator_normalize_brand(
         }
         result = mongo.products.update_one({"_id": doc["_id"]}, {"$set": updates})
         modified += int(result.modified_count)
+    after_docs = _cluster_products(mongo, key)
+    action_id = _record_curator_action(
+        mongo,
+        action_type="normalize_brand",
+        normalized_name=key,
+        summary=(
+            f"Normalized brand to '{dominant_brand}' for "
+            f"{len(before_docs)} products."
+        ),
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
 
     msg = quote_plus(
-        f"Normalized brand to '{dominant_brand}' for {len(docs)} products ({modified} updated)."
+        f"Normalized brand to '{dominant_brand}' for {len(docs)} products "
+        f"({modified} updated). Action #{action_id}."
     )
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
@@ -938,6 +1004,7 @@ async def curator_normalize_category(
     if len(docs) < 2:
         msg = quote_plus("Cluster has fewer than 2 products, nothing to normalize")
         return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+    before_docs = _snapshot_docs(docs)
 
     dominant_category = normalize_category(_dominant_text_value(docs, "category"))
     if not dominant_category:
@@ -958,9 +1025,85 @@ async def curator_normalize_category(
         }
         result = mongo.products.update_one({"_id": doc["_id"]}, {"$set": updates})
         modified += int(result.modified_count)
+    after_docs = _cluster_products(mongo, key)
+    action_id = _record_curator_action(
+        mongo,
+        action_type="normalize_category",
+        normalized_name=key,
+        summary=(
+            f"Normalized category to '{dominant_category}' for "
+            f"{len(before_docs)} products."
+        ),
+        before_docs=before_docs,
+        after_docs=after_docs,
+    )
 
     msg = quote_plus(
         f"Normalized category to '{dominant_category}' for {len(docs)} products "
-        f"({modified} updated)."
+        f"({modified} updated). Action #{action_id}."
+    )
+    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
+
+
+@router.post("/curator/actions/{action_id}/undo", response_class=HTMLResponse)
+async def curator_undo_action(
+    action_id: str,
+    limit: int = Form(25),
+):
+    if not ObjectId.is_valid(action_id):
+        msg = quote_plus("Invalid action ID")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    mongo = _get_mongo()
+    oid = ObjectId(action_id)
+    action = mongo.curator_actions.find_one({"_id": oid})
+    if not action:
+        msg = quote_plus("Curator action not found")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+    if action.get("status") == "undone":
+        msg = quote_plus("Action has already been undone")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    before_docs = action.get("before_docs") or []
+    after_docs = action.get("after_docs") or []
+    if not before_docs:
+        msg = quote_plus("Action has no stored snapshot to restore")
+        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+
+    before_ids = {
+        doc.get("_id")
+        for doc in before_docs
+        if isinstance(doc, dict) and doc.get("_id") is not None
+    }
+    restored = 0
+    for doc in before_docs:
+        if not isinstance(doc, dict) or doc.get("_id") is None:
+            continue
+        mongo.products.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        restored += 1
+
+    removed = 0
+    for doc in after_docs:
+        if not isinstance(doc, dict):
+            continue
+        doc_id = doc.get("_id")
+        if doc_id is None or doc_id in before_ids:
+            continue
+        result = mongo.products.delete_one({"_id": doc_id})
+        removed += int(result.deleted_count)
+
+    mongo.curator_actions.update_one(
+        {"_id": oid},
+        {
+            "$set": {
+                "status": "undone",
+                "undone_at": datetime.utcnow(),
+                "undo_stats": {"restored": restored, "removed": removed},
+            }
+        },
+    )
+
+    msg = quote_plus(
+        f"Undid action {action_id}: restored {restored} products, removed {removed} products."
     )
     return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)

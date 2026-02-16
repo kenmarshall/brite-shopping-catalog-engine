@@ -32,6 +32,7 @@ class MongoService:
         self.products = self.db[settings.collection_products]
         self.stores = self.db[settings.collection_stores]
         self.jobs = self.db[settings.collection_jobs]
+        self.curator_actions = self.db["curator_actions"]
         self._ensure_indexes()
 
     def _ensure_indexes(self) -> None:
@@ -44,6 +45,9 @@ class MongoService:
             self.stores.create_index([("store_id", ASCENDING)], unique=True)
             self.jobs.create_index([("status", ASCENDING)])
             self.jobs.create_index([("started_at", ASCENDING)])
+            self.curator_actions.create_index([("status", ASCENDING)])
+            self.curator_actions.create_index([("created_at", ASCENDING)])
+            self.curator_actions.create_index([("normalized_name", ASCENDING)])
         except Exception as exc:  # pragma: no cover
             LOGGER.debug("Index creation skipped: %s", exc)
 
@@ -63,7 +67,11 @@ class MongoService:
 
             merged = False
             for lp in new_location_prices:
-                lp_dict: dict[str, Any] = lp.model_dump() if isinstance(lp, models.LocationPrice) else dict(lp)
+                lp_dict: dict[str, Any] = (
+                    lp.model_dump()
+                    if isinstance(lp, models.LocationPrice)
+                    else dict(lp)
+                )
                 if lp_dict.get("location_id") not in existing_location_ids:
                     current_prices.append(lp_dict)
                     merged = True
@@ -97,7 +105,11 @@ class MongoService:
             if product.category and not existing.get("category"):
                 update["category"] = product.category
             if product.size and product.size.value and not existing.get("size", {}).get("value"):
-                update["size"] = product.size.model_dump() if hasattr(product.size, "model_dump") else dict(product.size)
+                update["size"] = (
+                    product.size.model_dump()
+                    if hasattr(product.size, "model_dump")
+                    else dict(product.size)
+                )
             # Use image from whichever source provides a real one
             existing_img = existing.get("image_url") or ""
             new_img = product.image_url or ""
