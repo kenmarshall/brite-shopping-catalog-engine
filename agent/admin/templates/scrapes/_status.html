@@ -24,8 +24,12 @@
           <span class="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">running</span>
           {% elif job.status == "stopping" %}
           <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">stopping</span>
+          {% elif job.status == "cancel_requested" %}
+          <span class="inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">cancel requested</span>
           {% elif job.status == "stopped" %}
           <span class="inline-flex rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-800">stopped</span>
+          {% elif job.status == "cancelled" %}
+          <span class="inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">cancelled</span>
           {% elif job.status == "done" %}
           <span class="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">done</span>
           {% elif job.status == "error" %}
@@ -40,12 +44,32 @@
         <td class="px-4 py-3 text-xs text-gray-600">{{ job.started_at.strftime('%Y-%m-%d %H:%M:%S') if job.started_at else '—' }}</td>
         <td class="px-4 py-3 text-xs text-gray-600">{{ job.finished_at.strftime('%Y-%m-%d %H:%M:%S') if job.finished_at else '—' }}</td>
         <td class="px-4 py-3 text-right">
-          {% if job.status in ["running", "stopping"] %}
+          {% if job.status == "running" %}
           <form method="post" action="/admin/scrapes/{{ job._id }}/stop" class="inline">
             <button type="submit" class="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100">
-              {% if job.status == "stopping" %}Stop Requested{% else %}Stop{% endif %}
+              Stop
             </button>
           </form>
+          <form method="post" action="/admin/scrapes/{{ job._id }}/cancel" class="inline">
+            <button type="submit" class="ml-2 rounded-md border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100">
+              Cancel
+            </button>
+          </form>
+          {% elif job.status == "stopping" %}
+          <span class="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+            Stop Requested
+          </span>
+          <form method="post" action="/admin/scrapes/{{ job._id }}/cancel" class="inline">
+            <button type="submit" class="ml-2 rounded-md border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100">
+              Cancel
+            </button>
+          </form>
+          {% elif job.status == "cancel_requested" %}
+          <span class="rounded-md border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">
+            Cancel Requested
+          </span>
+          {% elif job.status in ["stopped", "cancelled", "done", "error"] %}
+          <span class="text-xs text-gray-400">—</span>
           {% else %}
           <span class="text-xs text-gray-400">—</span>
           {% endif %}

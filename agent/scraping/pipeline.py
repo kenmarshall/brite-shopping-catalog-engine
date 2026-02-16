@@ -28,22 +28,16 @@ def _serialize_job(mongo: MongoService, job_id: Any) -> dict[str, Any] | None:
     return job_doc
 
 
-def _should_stop(mongo: MongoService, job_id: Any) -> bool:
+def _halt_status(mongo: MongoService, job_id: Any) -> str | None:
     job_doc = mongo.get_job(str(job_id))
     if not job_doc:
-        return False
-    return job_doc.get("status") == "stopping"
-
-
-def _mark_stopped(mongo: MongoService, job_id: Any, stats: models.ScrapeJobStats) -> None:
-    mongo.update_job(
-        job_id,
-        {
-            "status": "stopped",
-            "stats": stats.model_dump(),
-            "finished_at": datetime.utcnow(),
-        },
-    )
+        return None
+    status = job_doc.get("status")
+    if status == "stopping":
+        return "stopped"
+    if status == "cancel_requested":
+        return "cancelled"
+    return None
 
 
 def _stop_if_requested(
@@ -51,11 +45,32 @@ def _stop_if_requested(
     job_id: Any,
     stats: models.ScrapeJobStats,
 ) -> bool:
-    if not _should_stop(mongo, job_id):
+    final_status = _halt_status(mongo, job_id)
+    if not final_status:
         return False
-    _mark_stopped(mongo, job_id, stats)
-    LOGGER.info("Scrape stopped early: %s", job_id)
+    mongo.update_job(
+        job_id,
+        {
+            "status": final_status,
+            "stats": stats.model_dump(),
+            "finished_at": datetime.utcnow(),
+        },
+    )
+    LOGGER.info("Scrape %s early: %s", final_status, job_id)
     return True
+
+
+def _mark_done(mongo: MongoService, job_id: Any, stats: models.ScrapeJobStats) -> None:
+    if _stop_if_requested(mongo, job_id, stats):
+        return
+    mongo.update_job(
+        job_id,
+        {
+            "status": "done",
+            "stats": stats.model_dump(),
+            "finished_at": datetime.utcnow(),
+        },
+    )
 
 
 def load_source_configs(path: Path) -> list[dict[str, Any]]:
@@ -202,14 +217,9 @@ async def scrape_store(store_id: str, *, use_playwright: bool = True) -> dict[st
                 )
                 if next_url and next_url in visited:
                     break
-        mongo.update_job(
-            job_id,
-            {"status": "done", "stats": stats.model_dump(), "finished_at": datetime.utcnow()},
-        )
+        _mark_done(mongo, job_id, stats)
     except Exception as exc:  # pragma: no cover
-        if _should_stop(mongo, job_id):
-            _mark_stopped(mongo, job_id, stats)
-        else:
+        if not _stop_if_requested(mongo, job_id, stats):
             LOGGER.exception("Scrape failed")
             mongo.update_job(
                 job_id,
@@ -262,14 +272,9 @@ async def scrape_url(
                 stats.saved += 1
             else:
                 stats.updated += 1
-        mongo.update_job(
-            job_id,
-            {"status": "done", "stats": stats.model_dump(), "finished_at": datetime.utcnow()},
-        )
+        _mark_done(mongo, job_id, stats)
     except Exception as exc:  # pragma: no cover
-        if _should_stop(mongo, job_id):
-            _mark_stopped(mongo, job_id, stats)
-        else:
+        if not _stop_if_requested(mongo, job_id, stats):
             LOGGER.exception("Scrape failed")
             mongo.update_job(
                 job_id,
@@ -354,14 +359,9 @@ async def _scrape_loccloud(store_id: str, config: dict[str, Any]) -> dict[str, A
             else:
                 stats.updated += 1
 
-        mongo.update_job(
-            job_id,
-            {"status": "done", "stats": stats.model_dump(), "finished_at": datetime.utcnow()},
-        )
+        _mark_done(mongo, job_id, stats)
     except Exception as exc:
-        if _should_stop(mongo, job_id):
-            _mark_stopped(mongo, job_id, stats)
-        else:
+        if not _stop_if_requested(mongo, job_id, stats):
             LOGGER.exception("LocCloud scrape failed")
             mongo.update_job(
                 job_id,

@@ -324,7 +324,9 @@ async def dashboard(request: Request):
     recent_jobs = list(mongo.jobs.find().sort("started_at", -1).limit(10))
     for job in recent_jobs:
         job["_id"] = str(job["_id"])
-    running_count = mongo.jobs.count_documents({"status": {"$in": ["running", "stopping"]}})
+    running_count = mongo.jobs.count_documents(
+        {"status": {"$in": ["running", "stopping", "cancel_requested"]}}
+    )
 
     return templates.TemplateResponse(
         "dashboard.html",
@@ -727,7 +729,7 @@ async def start_scrape(store_id: str = Form(...)):
     existing = mongo.jobs.find_one(
         {
             "store_id": store_id,
-            "status": {"$in": ["running", "stopping"]},
+            "status": {"$in": ["running", "stopping", "cancel_requested"]},
         }
     )
     if existing:
@@ -759,14 +761,52 @@ async def stop_scrape(job_id: str):
         msg = quote_plus("Scrape job not found")
         return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
 
-    if job.get("status") not in {"running", "stopping"}:
+    status = job.get("status")
+    if status == "cancel_requested":
+        msg = quote_plus("Cancel already requested for this scrape")
+        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+
+    if status not in {"running", "stopping"}:
         msg = quote_plus("Only running scrapes can be stopped")
         return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+
+    if status == "stopping":
+        msg = quote_plus("Stop already requested for this scrape")
+        return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
 
     mongo.update_job(oid, {"status": "stopping"})
     LOGGER.info("Stop requested for scrape job %s", job_id)
 
     msg = quote_plus("Stop requested. The scraper will stop safely on its next checkpoint")
+    return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
+
+
+@router.post("/scrapes/{job_id}/cancel", response_class=HTMLResponse)
+async def cancel_scrape(job_id: str):
+    if not ObjectId.is_valid(job_id):
+        msg = quote_plus("Invalid job ID")
+        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+
+    mongo = _get_mongo()
+    oid = ObjectId(job_id)
+    job = mongo.jobs.find_one({"_id": oid})
+    if not job:
+        msg = quote_plus("Scrape job not found")
+        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+
+    status = job.get("status")
+    if status == "cancel_requested":
+        msg = quote_plus("Cancel already requested for this scrape")
+        return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
+
+    if status not in {"running", "stopping"}:
+        msg = quote_plus("Only running scrapes can be cancelled")
+        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+
+    mongo.update_job(oid, {"status": "cancel_requested"})
+    LOGGER.info("Cancel requested for scrape job %s", job_id)
+
+    msg = quote_plus("Cancel requested. The scraper will stop and mark the job as cancelled.")
     return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
 
 

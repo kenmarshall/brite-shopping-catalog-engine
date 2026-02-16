@@ -78,7 +78,16 @@ class ScrapeJob(BaseModel):
     id: str | None = Field(default=None, alias="_id")
     store_id: str | None = None
     seed_url: str | None = None
-    status: Literal["queued", "running", "stopping", "stopped", "done", "error"] = "queued"
+    status: Literal[
+        "queued",
+        "running",
+        "stopping",
+        "cancel_requested",
+        "stopped",
+        "cancelled",
+        "done",
+        "error",
+    ] = "queued"
     stats: ScrapeJobStats = Field(default_factory=ScrapeJobStats)
     errors: list[ScrapeJobError] = Field(default_factory=list)
     started_at: datetime = Field(default_factory=datetime.utcnow)
