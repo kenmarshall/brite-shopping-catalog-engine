@@ -6,3 +6,4 @@ venv
 .env
 data/faiss.index
 data/faiss_meta.json
+data/sessions/*.json
