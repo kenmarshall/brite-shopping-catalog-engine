@@ -106,6 +106,78 @@ def _object_id_or_none(value: str) -> ObjectId | None:
     return ObjectId(value)
 
 
+def _non_empty(values: list[Any]) -> list[str]:
+    cleaned: list[str] = []
+    for value in values:
+        text = str(value).strip() if value is not None else ""
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def _collect_curator_conflicts(
+    mongo: MongoService,
+    *,
+    top_k: int = 25,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    pipeline = [
+        {"$match": {"normalized_name": {"$nin": [None, ""]}}},
+        {
+            "$group": {
+                "_id": "$normalized_name",
+                "count": {"$sum": 1},
+                "brands": {"$addToSet": {"$ifNull": ["$brand", ""]}},
+                "categories": {"$addToSet": {"$ifNull": ["$category", ""]}},
+                "match_keys": {"$addToSet": {"$ifNull": ["$match_key", ""]}},
+                "stores": {"$addToSet": {"$ifNull": ["$store_id", ""]}},
+                "sample_names": {"$addToSet": {"$ifNull": ["$name", ""]}},
+            }
+        },
+        {"$match": {"count": {"$gt": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 1000},
+    ]
+    rows = list(mongo.products.aggregate(pipeline))
+
+    brand_conflicts: list[dict[str, Any]] = []
+    category_conflicts: list[dict[str, Any]] = []
+    match_key_conflicts: list[dict[str, Any]] = []
+
+    for row in rows:
+        normalized_name = str(row.get("_id", "")).strip()
+        if not normalized_name:
+            continue
+        sample_names = _non_empty(row.get("sample_names") or [])
+        sample_name = sample_names[0] if sample_names else normalized_name
+        stores = _non_empty(row.get("stores") or [])
+        brands = _non_empty(row.get("brands") or [])
+        categories = _non_empty(row.get("categories") or [])
+        match_keys = _non_empty(row.get("match_keys") or [])
+
+        payload = {
+            "normalized_name": normalized_name,
+            "sample_name": sample_name,
+            "count": int(row.get("count", 0)),
+            "stores": stores,
+            "brands": brands,
+            "categories": categories,
+            "match_keys_count": len(match_keys),
+        }
+
+        if len(brands) > 1:
+            brand_conflicts.append(payload)
+        if len(categories) > 1:
+            category_conflicts.append(payload)
+        if len(match_keys) > 1:
+            match_key_conflicts.append(payload)
+
+    return (
+        brand_conflicts[:top_k],
+        category_conflicts[:top_k],
+        match_key_conflicts[:top_k],
+    )
+
+
 # ---- Dashboard ----
 
 
@@ -592,12 +664,23 @@ async def scrape_status(request: Request):
 
 
 @router.get("/curator", response_class=HTMLResponse)
-async def curator_page(request: Request):
+async def curator_page(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    brand_conflicts, category_conflicts, match_key_conflicts = _collect_curator_conflicts(
+        mongo,
+        top_k=limit,
+    )
     return templates.TemplateResponse(
         "curator/list.html",
         {
             "request": request,
-            "discrepancies": [],
+            "brand_conflicts": brand_conflicts,
+            "category_conflicts": category_conflicts,
+            "match_key_conflicts": match_key_conflicts,
+            "limit": limit,
             "page_title": "AI Curator",
             "active_nav": "curator",
         },
