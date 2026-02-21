@@ -61,6 +61,12 @@
                   Merge
                 </button>
               </form>
+              <form method="post" action="/admin/curator/dismiss" class="async-action-form inline" hx-post="/admin/curator/dismiss" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="section" value="conflicts">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 hover:bg-gray-100" data-loading-text="..." title="Dismiss — not a real conflict">Dismiss</button>
+              </form>
             </div>
           </td>
         </tr>
@@ -134,6 +140,12 @@
                 >
                   Normalize Brand
                 </button>
+              </form>
+              <form method="post" action="/admin/curator/dismiss" class="async-action-form inline" hx-post="/admin/curator/dismiss" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="section" value="conflicts">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 hover:bg-gray-100" data-loading-text="..." title="Dismiss — not a real conflict">Dismiss</button>
               </form>
             </div>
           </td>
@@ -212,6 +224,12 @@
                 >
                   Apply
                 </button>
+              </form>
+              <form method="post" action="/admin/curator/dismiss" class="async-action-form inline" hx-post="/admin/curator/dismiss" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="section" value="conflicts">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 hover:bg-gray-100" data-loading-text="..." title="Dismiss — not a real conflict">Dismiss</button>
               </form>
             </div>
           </td>

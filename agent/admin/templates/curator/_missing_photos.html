@@ -55,7 +55,14 @@
               {% if row._photo_upload_needed %}
               <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">queued</span>
               {% endif %}
-              <a href="/admin/products/{{ row._id }}" class="text-xs text-brand hover:underline">Add Photo</a>
+              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/products/{{ row._id }}" class="text-xs text-gray-500 hover:underline">Edit</a>
+              <form method="post" action="/admin/curator/dismiss" class="async-action-form inline" hx-post="/admin/curator/dismiss" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="section" value="missing-photos">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 hover:bg-gray-100" data-loading-text="..." title="Dismiss — not an issue">Dismiss</button>
+              </form>
             </div>
           </td>
         </tr>

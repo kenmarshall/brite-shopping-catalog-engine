@@ -397,9 +397,11 @@ def _collect_curator_conflicts(
     top_k: int = 25,
     include_sizes: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    dismissed = _dismissed_names(mongo, "conflicts")
     pipeline_limit = min(max(top_k * 8, top_k), 5000)
+    excluded = [None, ""] + list(dismissed)
     pipeline = [
-        {"$match": {"normalized_name": {"$nin": [None, ""]}}},
+        {"$match": {"normalized_name": {"$nin": excluded}}},
         {
             "$group": {
                 "_id": "$normalized_name",
@@ -472,8 +474,10 @@ def _collect_manual_merge_flags(
     *,
     top_k: int = 25,
 ) -> tuple[list[dict[str, Any]], int]:
+    dismissed = _dismissed_names(mongo, "manual-flags")
+    excluded = [None, ""] + list(dismissed)
     pipeline = [
-        {"$match": {"curator.manual_merge_flag": True, "normalized_name": {"$nin": [None, ""]}}},
+        {"$match": {"curator.manual_merge_flag": True, "normalized_name": {"$nin": excluded}}},
         {
             "$group": {
                 "_id": "$normalized_name",
@@ -523,6 +527,7 @@ def _collect_name_cleanup_candidates(
     top_k: int = 25,
     compute_total: bool = True,
 ) -> tuple[list[dict[str, Any]], int]:
+    dismissed = _dismissed_names(mongo, "name-size")
     projection = {
         "name": 1,
         "store_id": 1,
@@ -538,6 +543,9 @@ def _collect_name_cleanup_candidates(
     for doc in cursor:
         raw_name = str(doc.get("name") or "").strip()
         if not raw_name:
+            continue
+        norm = str(doc.get("normalized_name") or "")
+        if norm in dismissed:
             continue
 
         stripped = strip_size_from_name(raw_name).strip()
@@ -608,12 +616,15 @@ def _collect_missing_photo_candidates(
     *,
     top_k: int = 25,
 ) -> tuple[list[dict[str, Any]], int]:
-    missing_photo_query = {
+    dismissed = _dismissed_names(mongo, "missing-photos")
+    missing_photo_query: dict[str, Any] = {
         "$or": [
             {"image_url": {"$in": [None, ""]}},
             {"image_url": {"$regex": "^data:", "$options": "i"}},
         ]
     }
+    if dismissed:
+        missing_photo_query["normalized_name"] = {"$nin": list(dismissed)}
     total_missing = mongo.products.count_documents(missing_photo_query)
     docs = list(
         mongo.products.find(
@@ -657,9 +668,11 @@ def _collect_price_anomalies(
     differ by more than *ratio_threshold*.  A 4x price gap for the same size
     usually means one product has the wrong size attached to its price
     (e.g. the 517g price was stored under a 184g record)."""
+    dismissed = _dismissed_names(mongo, "price-anomalies")
+    excluded = [None, ""] + list(dismissed)
 
     pipeline: list[dict[str, Any]] = [
-        {"$match": {"normalized_name": {"$nin": [None, ""]}, "estimated_price": {"$gt": 0}}},
+        {"$match": {"normalized_name": {"$nin": excluded}, "estimated_price": {"$gt": 0}}},
         {
             "$group": {
                 "_id": "$normalized_name",
@@ -734,6 +747,21 @@ def _collect_price_anomalies(
             }
         )
     return results
+
+
+def _dismissed_names(mongo: MongoService, section: str) -> set[str]:
+    """Return normalized_names that have been dismissed for *section*."""
+    docs = mongo.curator_dismissed.find(
+        {"section": section},
+        {"normalized_name": 1},
+    )
+    return {str(d.get("normalized_name", "")) for d in docs} - {""}
+
+
+def _dismissed_names_all(mongo: MongoService) -> set[str]:
+    """Return normalized_names dismissed in *any* section."""
+    docs = mongo.curator_dismissed.find({}, {"normalized_name": 1})
+    return {str(d.get("normalized_name", "")) for d in docs} - {""}
 
 
 def _curator_row_limit(limit: int) -> int:
@@ -3227,4 +3255,90 @@ async def curator_undo_action(
             f"Undid action {action_id}: restored {restored} products, "
             f"removed {removed} products."
         ),
+    )
+
+
+# ── Dismiss / Restore ─────────────────────────────────────────────
+
+_DISMISS_SECTION_MAP: dict[str, str] = {
+    "conflicts": "conflicts",
+    "manual-flags": "manual-flags",
+    "name-size": "name-size",
+    "missing-photos": "missing-photos",
+    "price-anomalies": "price-anomalies",
+}
+
+
+@router.post("/curator/dismiss", response_class=HTMLResponse)
+async def curator_dismiss(
+    request: Request,
+    normalized_name: str = Form(...),
+    section: str = Form(...),
+    limit: int = Form(25),
+):
+    """Dismiss a cluster from a curator section so it no longer shows up."""
+    key = _normalize_cluster_name(normalized_name)
+    if not key:
+        return _curator_feedback(request, limit=limit, error="Invalid cluster name")
+    if section not in _DISMISS_SECTION_MAP:
+        return _curator_feedback(request, limit=limit, error=f"Unknown section: {section}")
+
+    mongo = _get_mongo()
+    mongo.curator_dismissed.update_one(
+        {"normalized_name": key, "section": section},
+        {
+            "$set": {
+                "normalized_name": key,
+                "section": section,
+                "dismissed_at": datetime.utcnow(),
+            }
+        },
+        upsert=True,
+    )
+
+    events = _SECTION_EVENTS.get(section, [])
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message=f"Dismissed '{key}' from {_SECTION_LABELS.get(section, section)}.",
+            events=events,
+            body="",
+        )
+    return _feedback_response(
+        request,
+        fallback_path="/admin/curator",
+        message=f"Dismissed '{key}' from {_SECTION_LABELS.get(section, section)}.",
+        events=["admin:curator-refresh"],
+        extra_params={"limit": limit},
+    )
+
+
+@router.post("/curator/restore", response_class=HTMLResponse)
+async def curator_restore(
+    request: Request,
+    normalized_name: str = Form(...),
+    section: str = Form(""),
+    limit: int = Form(25),
+):
+    """Restore a previously dismissed cluster."""
+    key = _normalize_cluster_name(normalized_name)
+    if not key:
+        return _curator_feedback(request, limit=limit, error="Invalid cluster name")
+
+    mongo = _get_mongo()
+    query: dict[str, Any] = {"normalized_name": key}
+    if section:
+        query["section"] = section
+    mongo.curator_dismissed.delete_many(query)
+
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message=f"Restored '{key}' — it will reappear on next scan.",
+            events=["admin:curator-refresh-summary"],
+        )
+    return _feedback_response(
+        request,
+        fallback_path="/admin/curator",
+        message=f"Restored '{key}' — it will reappear on next scan.",
+        events=["admin:curator-refresh"],
+        extra_params={"limit": limit},
     )

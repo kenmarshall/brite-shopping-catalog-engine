@@ -51,7 +51,15 @@
             </div>
           </td>
           <td class="px-4 py-3 text-right">
-            <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+            <div class="inline-flex items-center gap-2">
+              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <form method="post" action="/admin/curator/dismiss" class="async-action-form inline" hx-post="/admin/curator/dismiss" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="section" value="price-anomalies">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 hover:bg-gray-100" data-loading-text="..." title="Dismiss — not an issue">Dismiss</button>
+              </form>
+            </div>
           </td>
         </tr>
         {% endfor %}

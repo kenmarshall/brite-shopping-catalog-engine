@@ -61,7 +61,8 @@
           <td class="px-4 py-3 text-xs text-gray-700">{{ row.reasons | join(', ') }}</td>
           <td class="px-4 py-3 text-right">
             <div class="inline-flex items-center gap-2">
-              <a href="/admin/products/{{ row.product_id }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/products/{{ row.product_id }}" class="text-xs text-gray-500 hover:underline">Edit</a>
               <form method="post" action="/admin/curator/normalize-name-size" class="curator-action-form async-action-form inline" hx-post="/admin/curator/normalize-name-size" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
                 <input type="hidden" name="product_id" value="{{ row.product_id }}">
                 <input type="hidden" name="limit" value="{{ limit }}">
@@ -72,6 +73,12 @@
                 >
                   Normalize Name+Size
                 </button>
+              </form>
+              <form method="post" action="/admin/curator/dismiss" class="async-action-form inline" hx-post="/admin/curator/dismiss" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="section" value="name-size">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 hover:bg-gray-100" data-loading-text="..." title="Dismiss — not an issue">Dismiss</button>
               </form>
             </div>
           </td>
