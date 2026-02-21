@@ -59,6 +59,40 @@ def test_build_checksum_changes_with_pack_count():
     assert checksum_a != checksum_b
 
 
+def test_parse_size_gallon():
+    size = parse_size("Wata 1Gal")
+    assert size.value == 1.0
+    assert size.unit == "gal"
+    assert size.pack_count is None
+
+
+def test_parse_size_gallon_variants():
+    for text in ["5 gallon", "2gallons", "1gal"]:
+        size = parse_size(text)
+        assert size.unit == "gal", f"Failed for '{text}': got {size.unit}"
+        assert size.value is not None, f"Failed for '{text}': no value"
+
+
+def test_parse_size_pint_quart():
+    size = parse_size("Milk 1pt")
+    assert size.value == 1.0
+    assert size.unit == "pt"
+
+    size = parse_size("Juice 1 quart")
+    assert size.value == 1.0
+    assert size.unit == "qt"
+
+
+def test_parse_size_cl_mg():
+    size = parse_size("Perfume 50cl")
+    assert size.value == 50.0
+    assert size.unit == "cl"
+
+    size = parse_size("Vitamin C 500mg")
+    assert size.value == 500.0
+    assert size.unit == "mg"
+
+
 def test_normalize_brand_category():
     assert normalize_brand("grace") == "Grace"
     assert normalize_category(" canned goods ") == "Canned Goods"

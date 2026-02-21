@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import threading
 from copy import deepcopy
@@ -14,6 +15,7 @@ from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from agent.config.categories import STANDARD_CATEGORIES
 from agent.db.models import LocationPrice, Product, SizeInfo
 from agent.db.mongo import MongoService
 from agent.scraping.normalizer import (
@@ -44,6 +46,16 @@ DEFAULT_SELECTORS = {
     "category_hint": None,
     "location_hint": None,
 }
+
+CURATOR_SNAPSHOT_KEY = "primary"
+CURATOR_SNAPSHOT_ROW_CAP = 100
+
+_EMPTY_ROW_MATCH_KEY = '<tr><td colspan="6" class="px-4 py-10 text-center text-gray-400">No match-key conflicts found in current dataset</td></tr>'
+_EMPTY_ROW_BRAND = '<tr><td colspan="6" class="px-4 py-10 text-center text-gray-400">No brand conflicts found</td></tr>'
+_EMPTY_ROW_CATEGORY = '<tr><td colspan="6" class="px-4 py-10 text-center text-gray-400">No category conflicts found</td></tr>'
+_EMPTY_ROW_FLAGS = '<tr><td colspan="6" class="px-4 py-10 text-center text-gray-400">No manual merge flags yet</td></tr>'
+_EMPTY_ROW_NAME_SIZE = '<tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">No name/size normalization candidates found</td></tr>'
+_EMPTY_ROW_PHOTOS = '<tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">No missing-photo products found</td></tr>'
 
 
 def _get_mongo() -> MongoService:
@@ -118,6 +130,27 @@ def _non_empty(values: list[Any]) -> list[str]:
     return cleaned
 
 
+def _visible_cluster_keys(form: Any, field_name: str = "normalized_names") -> list[str]:
+    values = form.getlist(field_name) if hasattr(form, "getlist") else []
+    return _non_empty([_normalize_cluster_name(str(value)) for value in values])
+
+
+def _visible_product_ids(form: Any, field_name: str = "product_ids") -> list[ObjectId]:
+    values = form.getlist(field_name) if hasattr(form, "getlist") else []
+    rows: list[ObjectId] = []
+    seen: set[str] = set()
+    for value in values:
+        oid = _object_id_or_none(str(value))
+        if oid is None:
+            continue
+        oid_text = str(oid)
+        if oid_text in seen:
+            continue
+        seen.add(oid_text)
+        rows.append(oid)
+    return rows
+
+
 def _is_missing_photo(doc: dict[str, Any]) -> bool:
     image_url = str(doc.get("image_url") or "").strip()
     return not image_url or image_url.startswith("data:")
@@ -139,6 +172,65 @@ def _format_size(size: SizeInfo) -> str:
     if size.value is not None:
         return _float_text(size.value)
     return "—"
+
+
+def _format_pack(size: SizeInfo) -> str:
+    """Format just the pack/qty portion, e.g. '6-pack'."""
+    if size.pack_count and size.pack_count > 1:
+        return f"{size.pack_count}-pack"
+    return ""
+
+
+def _format_measure(size: SizeInfo) -> str:
+    """Format just the measure portion (value + unit), e.g. '330ml'."""
+    if size.value is not None and size.unit:
+        return f"{_float_text(size.value)}{size.unit}"
+    if size.value is not None:
+        return _float_text(size.value)
+    return ""
+
+
+def _size_signature(size: SizeInfo) -> tuple[float | None, str | None, int | None]:
+    return (size.value, size.unit, size.pack_count)
+
+
+def _known_size_signatures_from_docs(
+    docs: list[dict[str, Any]],
+) -> set[tuple[float | None, str | None, int | None]]:
+    signatures: set[tuple[float | None, str | None, int | None]] = set()
+    for doc in docs:
+        signature = _size_signature(_size_info_from_doc(doc))
+        if signature != (None, None, None):
+            signatures.add(signature)
+    return signatures
+
+
+def _size_labels_from_docs(docs: list[dict[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    for doc in docs:
+        label = _format_size(_size_info_from_doc(doc))
+        if label == "—":
+            continue
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _split_size_labels_from_docs(
+    docs: list[dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    """Return deduplicated (pack_labels, measure_labels) from a list of docs."""
+    packs: list[str] = []
+    measures: list[str] = []
+    for doc in docs:
+        si = _size_info_from_doc(doc)
+        pl = _format_pack(si)
+        ml = _format_measure(si)
+        if pl and pl not in packs:
+            packs.append(pl)
+        if ml and ml not in measures:
+            measures.append(ml)
+    return packs, measures
 
 
 def _size_hint_from_size(size: SizeInfo) -> str:
@@ -199,6 +291,60 @@ def _redirect_back(
     return RedirectResponse(target, status_code=303)
 
 
+def _is_hx_request(request: Request) -> bool:
+    return request.headers.get("HX-Request") == "true"
+
+
+def _hx_trigger_response(
+    *,
+    message: str | None = None,
+    error: str | None = None,
+    events: list[str] | None = None,
+    reset_form_id: str | None = None,
+    status_code: int = 200,
+    body: str = "",
+) -> HTMLResponse:
+    payload: dict[str, Any] = {}
+    if message:
+        payload["admin:notify"] = {"level": "success", "message": message}
+    if error:
+        payload["admin:notify"] = {"level": "error", "message": error}
+    for event_name in events or []:
+        payload[event_name] = True
+    if reset_form_id:
+        payload["admin:reset-form"] = {"id": reset_form_id}
+    headers = {"HX-Trigger": json.dumps(payload)} if payload else {}
+    return HTMLResponse(body, status_code=status_code, headers=headers)
+
+
+def _feedback_response(
+    request: Request,
+    *,
+    fallback_path: str,
+    message: str | None = None,
+    error: str | None = None,
+    events: list[str] | None = None,
+    reset_form_id: str | None = None,
+    extra_params: dict[str, Any] | None = None,
+) -> HTMLResponse | RedirectResponse:
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message=message,
+            error=error,
+            events=events,
+            reset_form_id=reset_form_id,
+        )
+
+    params: dict[str, Any] = dict(extra_params or {})
+    if message:
+        params["message"] = message
+    if error:
+        params["error"] = error
+    query = urlencode(params, quote_via=quote_plus)
+    target = f"{fallback_path}?{query}" if query else fallback_path
+    return RedirectResponse(target, status_code=303)
+
+
 def _snapshot_docs(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [deepcopy(doc) for doc in docs]
 
@@ -239,7 +385,9 @@ def _collect_curator_conflicts(
     mongo: MongoService,
     *,
     top_k: int = 25,
+    include_sizes: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    pipeline_limit = min(max(top_k * 8, top_k), 5000)
     pipeline = [
         {"$match": {"normalized_name": {"$nin": [None, ""]}}},
         {
@@ -251,11 +399,12 @@ def _collect_curator_conflicts(
                 "match_keys": {"$addToSet": {"$ifNull": ["$match_key", ""]}},
                 "stores": {"$addToSet": {"$ifNull": ["$store_id", ""]}},
                 "sample_names": {"$addToSet": {"$ifNull": ["$name", ""]}},
+                "sizes": {"$addToSet": {"$ifNull": ["$size", {}]}},
             }
         },
         {"$match": {"count": {"$gt": 1}}},
         {"$sort": {"count": -1}},
-        {"$limit": 1000},
+        {"$limit": pipeline_limit},
     ]
     rows = list(mongo.products.aggregate(pipeline))
 
@@ -273,6 +422,9 @@ def _collect_curator_conflicts(
         brands = _non_empty(row.get("brands") or [])
         categories = _non_empty(row.get("categories") or [])
         match_keys = _non_empty(row.get("match_keys") or [])
+        size_docs = [{"size": size_doc} for size_doc in (row.get("sizes") or [])]
+        size_signatures = _known_size_signatures_from_docs(size_docs)
+        has_mixed_sizes = len(size_signatures) > 1
 
         payload = {
             "normalized_name": normalized_name,
@@ -283,12 +435,19 @@ def _collect_curator_conflicts(
             "categories": categories,
             "match_keys_count": len(match_keys),
         }
+        if include_sizes:
+            size_labels = _size_labels_from_docs(size_docs)
+            payload["sizes"] = size_labels
+            payload["sizes_label"] = ", ".join(size_labels) if size_labels else "—"
+            pack_labels, measure_labels = _split_size_labels_from_docs(size_docs)
+            payload["packs_label"] = ", ".join(pack_labels) if pack_labels else "—"
+            payload["measures_label"] = ", ".join(measure_labels) if measure_labels else "—"
 
         if len(brands) > 1:
             brand_conflicts.append(payload)
         if len(categories) > 1:
             category_conflicts.append(payload)
-        if len(match_keys) > 1:
+        if len(match_keys) > 1 and not has_mixed_sizes:
             match_key_conflicts.append(payload)
 
     return (
@@ -312,6 +471,7 @@ def _collect_manual_merge_flags(
                 "stores": {"$addToSet": {"$ifNull": ["$store_id", ""]}},
                 "sample_names": {"$addToSet": {"$ifNull": ["$name", ""]}},
                 "notes": {"$addToSet": {"$ifNull": ["$curator.manual_merge_note", ""]}},
+                "sizes": {"$addToSet": {"$ifNull": ["$size", {}]}},
             }
         },
         {"$sort": {"count": -1}},
@@ -326,6 +486,9 @@ def _collect_manual_merge_flags(
             continue
         sample_names = _non_empty(row.get("sample_names") or [])
         notes = _non_empty(row.get("notes") or [])
+        size_docs = [{"size": size_doc} for size_doc in (row.get("sizes") or [])]
+        size_labels = _size_labels_from_docs(size_docs)
+        pack_labels, measure_labels = _split_size_labels_from_docs(size_docs)
         results.append(
             {
                 "normalized_name": normalized_name,
@@ -333,6 +496,10 @@ def _collect_manual_merge_flags(
                 "count": int(row.get("count", 0)),
                 "stores": _non_empty(row.get("stores") or []),
                 "notes": notes,
+                "sizes": size_labels,
+                "sizes_label": ", ".join(size_labels) if size_labels else "—",
+                "packs_label": ", ".join(pack_labels) if pack_labels else "—",
+                "measures_label": ", ".join(measure_labels) if measure_labels else "—",
             }
         )
 
@@ -344,6 +511,7 @@ def _collect_name_cleanup_candidates(
     mongo: MongoService,
     *,
     top_k: int = 25,
+    compute_total: bool = True,
 ) -> tuple[list[dict[str, Any]], int]:
     projection = {
         "name": 1,
@@ -369,6 +537,7 @@ def _collect_name_cleanup_candidates(
 
         has_size_tokens = bool(stripped and normalize_name(stripped) != normalize_name(raw_name))
         has_case_issue = raw_name != suggested_name
+        all_caps = raw_name.upper() == raw_name and any(ch.isalpha() for ch in raw_name)
         size_missing = (
             existing_size.value is None
             and existing_size.unit is None
@@ -383,8 +552,11 @@ def _collect_name_cleanup_candidates(
         if not (has_size_tokens or has_case_issue or size_missing or pack_missing):
             continue
 
-        total_candidates += 1
+        if compute_total:
+            total_candidates += 1
         if len(rows) >= top_k:
+            if not compute_total:
+                break
             continue
 
         reasons: list[str] = []
@@ -392,6 +564,8 @@ def _collect_name_cleanup_candidates(
             reasons.append("size in name")
         if has_case_issue:
             reasons.append("case mismatch")
+        if all_caps:
+            reasons.append("all caps")
         if size_missing:
             reasons.append("size missing")
         if pack_missing:
@@ -406,10 +580,16 @@ def _collect_name_cleanup_candidates(
                 "store_name": doc.get("store_name") or doc.get("store_id") or "—",
                 "current_size": _format_size(existing_size),
                 "suggested_size": _format_size(inferred_size),
+                "current_pack": _format_pack(existing_size),
+                "current_measure": _format_measure(existing_size),
+                "suggested_pack": _format_pack(inferred_size),
+                "suggested_measure": _format_measure(inferred_size),
                 "reasons": reasons,
             }
         )
 
+    if not compute_total:
+        total_candidates = len(rows)
     return rows, total_candidates
 
 
@@ -435,6 +615,7 @@ def _collect_missing_photo_candidates(
                 "brand": 1,
                 "category": 1,
                 "normalized_name": 1,
+                "size": 1,
                 "updated_at": 1,
                 "curator.photo_upload_needed": 1,
             },
@@ -446,7 +627,183 @@ def _collect_missing_photo_candidates(
         doc["_id"] = str(doc["_id"])
         curator_meta = doc.get("curator") or {}
         doc["_photo_upload_needed"] = bool(curator_meta.get("photo_upload_needed"))
+        _si = _size_info_from_doc(doc)
+        doc["_size_label"] = _format_size(_si)
+        doc["_pack_label"] = _format_pack(_si)
+        doc["_measure_label"] = _format_measure(_si)
     return docs, total_missing
+
+
+def _curator_row_limit(limit: int) -> int:
+    return max(5, min(int(limit), CURATOR_SNAPSHOT_ROW_CAP))
+
+
+def _build_curator_snapshot(
+    mongo: MongoService,
+    *,
+    row_cap: int = CURATOR_SNAPSHOT_ROW_CAP,
+) -> dict[str, Any]:
+    capped_limit = _curator_row_limit(row_cap)
+    brand_conflicts, category_conflicts, match_key_conflicts = _collect_curator_conflicts(
+        mongo,
+        top_k=capped_limit,
+        include_sizes=True,
+    )
+    manual_merge_flags, flagged_product_total = _collect_manual_merge_flags(
+        mongo,
+        top_k=capped_limit,
+    )
+    name_cleanup_candidates, name_cleanup_total = _collect_name_cleanup_candidates(
+        mongo,
+        top_k=capped_limit,
+        compute_total=False,
+    )
+    missing_photo_candidates, missing_photo_total = _collect_missing_photo_candidates(
+        mongo,
+        top_k=capped_limit,
+    )
+
+    now = datetime.utcnow()
+    return {
+        "snapshot_key": CURATOR_SNAPSHOT_KEY,
+        "row_cap": capped_limit,
+        "generated_at": now,
+        "updated_at": now,
+        "stale": False,
+        "stale_reason": "",
+        "brand_conflicts": brand_conflicts,
+        "category_conflicts": category_conflicts,
+        "match_key_conflicts": match_key_conflicts,
+        "manual_merge_flags": manual_merge_flags,
+        "flagged_product_total": int(flagged_product_total),
+        "name_cleanup_candidates": name_cleanup_candidates,
+        "name_cleanup_total": int(name_cleanup_total),
+        "missing_photo_candidates": missing_photo_candidates,
+        "missing_photo_total": int(missing_photo_total),
+    }
+
+
+def _refresh_curator_snapshot(
+    mongo: MongoService,
+    *,
+    row_cap: int = CURATOR_SNAPSHOT_ROW_CAP,
+) -> dict[str, Any]:
+    payload = _build_curator_snapshot(mongo, row_cap=row_cap)
+    mongo.curator_snapshots.update_one(
+        {"snapshot_key": CURATOR_SNAPSHOT_KEY},
+        {"$set": payload},
+        upsert=True,
+    )
+    return payload
+
+
+def _refresh_curator_section(
+    mongo: MongoService,
+    section: str,
+    *,
+    row_cap: int = CURATOR_SNAPSHOT_ROW_CAP,
+) -> dict[str, Any]:
+    """Re-scan a single curator section and update the cached snapshot."""
+    capped_limit = _curator_row_limit(row_cap)
+    now = datetime.utcnow()
+    updates: dict[str, Any] = {"updated_at": now}
+
+    if section == "conflicts":
+        brand, category, match_key = _collect_curator_conflicts(
+            mongo, top_k=capped_limit, include_sizes=True,
+        )
+        updates["brand_conflicts"] = brand
+        updates["category_conflicts"] = category
+        updates["match_key_conflicts"] = match_key
+    elif section == "manual-flags":
+        flags, total = _collect_manual_merge_flags(mongo, top_k=capped_limit)
+        updates["manual_merge_flags"] = flags
+        updates["flagged_product_total"] = int(total)
+    elif section == "name-size":
+        candidates, total = _collect_name_cleanup_candidates(
+            mongo, top_k=capped_limit, compute_total=False,
+        )
+        updates["name_cleanup_candidates"] = candidates
+        updates["name_cleanup_total"] = int(total)
+    elif section == "missing-photos":
+        candidates, total = _collect_missing_photo_candidates(mongo, top_k=capped_limit)
+        updates["missing_photo_candidates"] = candidates
+        updates["missing_photo_total"] = int(total)
+    else:
+        return {}
+
+    mongo.curator_snapshots.update_one(
+        {"snapshot_key": CURATOR_SNAPSHOT_KEY},
+        {"$set": updates},
+        upsert=True,
+    )
+    return updates
+
+
+def _mark_curator_snapshot_stale(
+    mongo: MongoService,
+    *,
+    reason: str = "Catalog data changed since last scan",
+) -> None:
+    now = datetime.utcnow()
+    mongo.curator_snapshots.update_one(
+        {"snapshot_key": CURATOR_SNAPSHOT_KEY},
+        {
+            "$set": {
+                "stale": True,
+                "stale_reason": reason,
+                "updated_at": now,
+            },
+            "$setOnInsert": {
+                "snapshot_key": CURATOR_SNAPSHOT_KEY,
+                "generated_at": None,
+                "row_cap": CURATOR_SNAPSHOT_ROW_CAP,
+            },
+        },
+        upsert=True,
+    )
+
+
+def _latest_product_updated_at(mongo: MongoService) -> datetime | None:
+    doc = mongo.products.find_one({}, {"updated_at": 1}, sort=[("updated_at", -1)])
+    if not doc:
+        return None
+    value = doc.get("updated_at")
+    return value if isinstance(value, datetime) else None
+
+
+def _load_curator_snapshot(
+    mongo: MongoService,
+    *,
+    ensure: bool = True,
+) -> dict[str, Any]:
+    snapshot = mongo.curator_snapshots.find_one({"snapshot_key": CURATOR_SNAPSHOT_KEY})
+    if not snapshot and ensure:
+        snapshot = _refresh_curator_snapshot(mongo, row_cap=CURATOR_SNAPSHOT_ROW_CAP)
+    if not snapshot:
+        return {}
+
+    generated_at = snapshot.get("generated_at")
+    latest_product_update = _latest_product_updated_at(mongo)
+    should_mark_stale = (
+        latest_product_update is not None
+        and (not isinstance(generated_at, datetime) or latest_product_update > generated_at)
+    )
+    if should_mark_stale and not bool(snapshot.get("stale")):
+        reason = "New product updates detected after the last curator scan"
+        _mark_curator_snapshot_stale(mongo, reason=reason)
+        snapshot["stale"] = True
+        snapshot["stale_reason"] = reason
+        snapshot["updated_at"] = datetime.utcnow()
+
+    return snapshot
+
+
+def _snapshot_rows(snapshot: dict[str, Any], key: str, limit: int) -> list[dict[str, Any]]:
+    rows = snapshot.get(key) or []
+    if not isinstance(rows, list):
+        return []
+    return rows[:_curator_row_limit(limit)]
 
 
 def _normalize_cluster_name(normalized_name: str) -> str:
@@ -543,6 +900,9 @@ def _execute_merge_cluster(mongo: MongoService, key: str) -> dict[str, Any]:
     docs = _cluster_products(mongo, key)
     if len(docs) < 2:
         raise ValueError("Cluster has fewer than 2 products, nothing to merge")
+    size_signatures = _known_size_signatures_from_docs(docs)
+    if len(size_signatures) > 1:
+        raise ValueError("Cluster has multiple size variants, merge by size only")
 
     before_docs = _snapshot_docs(docs)
     docs_sorted = sorted(
@@ -688,13 +1048,21 @@ def _execute_normalize_brand_cluster(mongo: MongoService, key: str) -> dict[str,
     }
 
 
-def _execute_normalize_category_cluster(mongo: MongoService, key: str) -> dict[str, Any]:
+def _execute_normalize_category_cluster(
+    mongo: MongoService,
+    key: str,
+    *,
+    target_category: str | None = None,
+) -> dict[str, Any]:
     docs = _cluster_products(mongo, key)
     if len(docs) < 2:
         raise ValueError("Cluster has fewer than 2 products, nothing to normalize")
 
     before_docs = _snapshot_docs(docs)
-    dominant_category = normalize_category(_dominant_text_value(docs, "category"))
+    if target_category:
+        dominant_category = target_category
+    else:
+        dominant_category = normalize_category(_dominant_text_value(docs, "category"))
     if not dominant_category:
         raise ValueError("No non-empty category found in cluster")
 
@@ -830,12 +1198,7 @@ def _execute_clear_manual_flags_cluster(mongo: MongoService, key: str) -> dict[s
     return {"cleared": len(ids), "action_id": str(action_id)}
 
 
-# ---- Dashboard ----
-
-
-@router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    mongo = _get_mongo()
+def _dashboard_store_stats(mongo: MongoService) -> list[dict[str, Any]]:
     pipeline = [
         {
             "$group": {
@@ -846,48 +1209,40 @@ async def dashboard(request: Request):
         },
         {"$sort": {"count": -1}},
     ]
-    store_stats = list(mongo.products.aggregate(pipeline))
-    total_products = sum(s["count"] for s in store_stats)
-    recent_jobs = list(mongo.jobs.find().sort("started_at", -1).limit(10))
+    return list(mongo.products.aggregate(pipeline))
+
+
+def _dashboard_recent_jobs(mongo: MongoService, limit: int = 10) -> list[dict[str, Any]]:
+    recent_jobs = list(mongo.jobs.find().sort("started_at", -1).limit(limit))
     for job in recent_jobs:
         job["_id"] = str(job["_id"])
+    return recent_jobs
+
+
+def _dashboard_snapshot(mongo: MongoService) -> dict[str, Any]:
+    store_stats = _dashboard_store_stats(mongo)
+    total_products = sum(s["count"] for s in store_stats)
+    recent_jobs = _dashboard_recent_jobs(mongo, limit=10)
     running_count = mongo.jobs.count_documents(
         {"status": {"$in": ["running", "stopping", "cancel_requested"]}}
     )
-
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
-            "store_stats": store_stats,
-            "total_products": total_products,
-            "recent_jobs": recent_jobs,
-            "running_count": running_count,
-            "page_title": "Dashboard",
-            "active_nav": "dashboard",
-        },
-    )
+    return {
+        "store_stats": store_stats,
+        "total_products": total_products,
+        "recent_jobs": recent_jobs,
+        "running_count": running_count,
+    }
 
 
-# ---- Products ----
-
-
-@router.get("/products", response_class=HTMLResponse)
-async def product_list(
-    request: Request,
-    q: str = Query("", alias="q"),
-    store: str = Query("", alias="store"),
-    flagged: str = Query("", alias="flagged"),
-    photo: str = Query("", alias="photo"),
-    page: int = Query(1),
-    limit: int = Query(50),
-    message: str = Query("", alias="message"),
-    error: str = Query("", alias="error"),
-):
-    mongo = _get_mongo()
-    skip = (page - 1) * limit
+def _build_products_query(
+    *,
+    q: str,
+    store: str,
+    flagged: str,
+    photo: str,
+) -> dict[str, Any]:
     query: dict[str, Any] = {}
-    conditions = []
+    conditions: list[dict[str, Any]] = []
     if q:
         conditions.append(
             {
@@ -922,17 +1277,36 @@ async def product_list(
         )
     if conditions:
         query = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+    return query
+
+
+def _product_list_payload(
+    mongo: MongoService,
+    *,
+    q: str,
+    store: str,
+    flagged: str,
+    photo: str,
+    page: int,
+    limit: int,
+) -> dict[str, Any]:
+    skip = (page - 1) * limit
+    query = _build_products_query(q=q, store=store, flagged=flagged, photo=photo)
 
     products = list(
         mongo.products.find(query, {"embedding": 0}).sort("updated_at", -1).skip(skip).limit(limit)
     )
     total = mongo.products.count_documents(query)
-    total_pages = math.ceil(total / limit) if total else 1
+    total_pages = max(math.ceil(total / limit), 1) if limit else 1
     for product in products:
         product["_id"] = str(product["_id"])
         curator_meta = product.get("curator") or {}
         product["_manual_merge_flag"] = bool(curator_meta.get("manual_merge_flag"))
         product["_missing_photo"] = _is_missing_photo(product)
+        _si = _size_info_from_doc(product)
+        product["_size_label"] = _format_size(_si)
+        product["_pack_label"] = _format_pack(_si)
+        product["_measure_label"] = _format_measure(_si)
 
     store_pipeline = [
         {"$group": {"_id": "$store_id", "store_name": {"$first": "$store_name"}}},
@@ -940,15 +1314,127 @@ async def product_list(
     ]
     stores = list(mongo.products.aggregate(store_pipeline))
 
+    return {
+        "products": products,
+        "stores": stores,
+        "total": total,
+        "total_pages": total_pages,
+        "page": page,
+        "limit": limit,
+        "query": q,
+        "active_store": store,
+        "active_flagged": flagged,
+        "active_photo": photo,
+    }
+
+
+# ---- Dashboard ----
+
+
+@router.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "page_title": "Dashboard",
+            "active_nav": "dashboard",
+        },
+    )
+
+
+@router.get("/dashboard/sections/stats", response_class=HTMLResponse)
+async def dashboard_stats_partial(request: Request):
+    mongo = _get_mongo()
+    store_stats = _dashboard_store_stats(mongo)
+    total_products = sum(s["count"] for s in store_stats)
+    running_count = mongo.jobs.count_documents(
+        {"status": {"$in": ["running", "stopping", "cancel_requested"]}}
+    )
+    return templates.TemplateResponse(
+        "dashboard/_stats.html",
+        {
+            "request": request,
+            "total_products": total_products,
+            "store_stats": store_stats,
+            "running_count": running_count,
+        },
+    )
+
+
+@router.get("/dashboard/sections/store-stats", response_class=HTMLResponse)
+async def dashboard_store_stats_partial(request: Request):
+    mongo = _get_mongo()
+    store_stats = _dashboard_store_stats(mongo)
+    return templates.TemplateResponse(
+        "dashboard/_store_stats.html",
+        {
+            "request": request,
+            "store_stats": store_stats,
+        },
+    )
+
+
+@router.get("/dashboard/sections/recent-jobs", response_class=HTMLResponse)
+async def dashboard_recent_jobs_partial(request: Request):
+    mongo = _get_mongo()
+    recent_jobs = _dashboard_recent_jobs(mongo, limit=10)
+    return templates.TemplateResponse(
+        "dashboard/_recent_jobs.html",
+        {
+            "request": request,
+            "recent_jobs": recent_jobs,
+        },
+    )
+
+
+# ---- Products ----
+
+
+@router.get("/products", response_class=HTMLResponse)
+async def product_list(
+    request: Request,
+    q: str = Query("", alias="q"),
+    store: str = Query("", alias="store"),
+    flagged: str = Query("", alias="flagged"),
+    photo: str = Query("", alias="photo"),
+    page: int = Query(1),
+    limit: int = Query(50),
+    message: str = Query("", alias="message"),
+    error: str = Query("", alias="error"),
+):
+    mongo = _get_mongo()
+    context = _product_list_payload(
+        mongo,
+        q=q,
+        store=store,
+        flagged=flagged,
+        photo=photo,
+        page=page,
+        limit=limit,
+    )
+
     if (
-        request.headers.get("HX-Request")
+        _is_hx_request(request)
+        and request.headers.get("HX-Target") == "products-results"
+    ):
+        return templates.TemplateResponse(
+            "products/_results.html",
+            {
+                "request": request,
+                **context,
+            },
+        )
+
+    if (
+        _is_hx_request(request)
         and request.headers.get("HX-Target") == "product-table-body"
     ):
         return templates.TemplateResponse(
             "products/_rows.html",
             {
                 "request": request,
-                "products": products,
+                "products": context["products"],
             },
         )
 
@@ -956,20 +1442,40 @@ async def product_list(
         "products/list.html",
         {
             "request": request,
-            "products": products,
-            "query": q,
-            "active_store": store,
-            "active_flagged": flagged,
-            "active_photo": photo,
-            "stores": stores,
-            "page": page,
-            "limit": limit,
-            "total": total,
-            "total_pages": total_pages,
             "message": message,
             "error": error,
             "page_title": "Products",
             "active_nav": "products",
+            **context,
+        },
+    )
+
+
+@router.get("/products/sections/results", response_class=HTMLResponse)
+async def product_results_partial(
+    request: Request,
+    q: str = Query("", alias="q"),
+    store: str = Query("", alias="store"),
+    flagged: str = Query("", alias="flagged"),
+    photo: str = Query("", alias="photo"),
+    page: int = Query(1),
+    limit: int = Query(50),
+):
+    mongo = _get_mongo()
+    context = _product_list_payload(
+        mongo,
+        q=q,
+        store=store,
+        flagged=flagged,
+        photo=photo,
+        page=page,
+        limit=limit,
+    )
+    return templates.TemplateResponse(
+        "products/_results.html",
+        {
+            "request": request,
+            **context,
         },
     )
 
@@ -985,6 +1491,7 @@ async def product_new(
         {
             "request": request,
             "sources": sources,
+            "standard_categories": STANDARD_CATEGORIES,
             "error": error,
             "page_title": "Add Product",
             "active_nav": "products",
@@ -999,8 +1506,11 @@ async def product_create(request: Request):
     name = str(form.get("name", "")).strip()
 
     if not store_id or not name:
-        msg = quote_plus("Store and product name are required")
-        return RedirectResponse(f"/admin/products/new?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/products/new",
+            error="Store and product name are required",
+        )
 
     sources = _decorate_sources(_load_sources())
     source_name_map = {source.get("source_id"): source.get("display_name") for source in sources}
@@ -1012,7 +1522,15 @@ async def product_create(request: Request):
     category_raw = str(form.get("category", "")).strip() or None
     image_url = str(form.get("image_url", "")).strip() or None
     product_url = str(form.get("url", "")).strip() or f"manual://{store_id}"
-    size_hint = str(form.get("size_hint", "")).strip() or name
+    size_hint_raw = str(form.get("size_hint", "")).strip()
+    pack_qty_raw = str(form.get("pack_qty", "")).strip()
+    # Combine pack qty and size hint: "6" + "330ml" → "6x330ml"
+    if pack_qty_raw and size_hint_raw:
+        size_hint = f"{pack_qty_raw}x{size_hint_raw}"
+    elif pack_qty_raw:
+        size_hint = f"{pack_qty_raw} pack"
+    else:
+        size_hint = size_hint_raw or name
     currency = str(form.get("currency", "JMD")).strip() or "JMD"
 
     price_raw = str(form.get("price", "")).strip()
@@ -1021,8 +1539,11 @@ async def product_create(request: Request):
         try:
             price = float(price_raw)
         except ValueError:
-            msg = quote_plus("Price must be a number")
-            return RedirectResponse(f"/admin/products/new?error={msg}", status_code=303)
+            return _feedback_response(
+                request,
+                fallback_path="/admin/products/new",
+                error="Price must be a number",
+            )
 
     normalized_name = normalize_name(name)
     normalized_brand = normalize_brand(brand_raw)
@@ -1065,7 +1586,37 @@ async def product_create(request: Request):
 
     mongo = _get_mongo()
     oid, _ = mongo.upsert_product(product)
+    _mark_curator_snapshot_stale(
+        mongo,
+        reason="Products changed. Run Scan Now to refresh curator snapshot.",
+    )
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message=f"Saved product '{name}'",
+            events=["admin:products-refresh", "admin:dashboard-refresh"],
+            reset_form_id="new-product-form",
+        )
     return RedirectResponse(f"/admin/products/{oid}", status_code=303)
+
+
+def _product_detail_payload(mongo: MongoService, oid: ObjectId) -> dict[str, Any] | None:
+    product = mongo.products.find_one({"_id": oid}, {"embedding": 0})
+    if not product:
+        return None
+    product["_id"] = str(product["_id"])
+    size_info = _size_info_from_doc(product)
+    size_hint = _size_hint_from_size(size_info) or str(product.get("name") or "")
+    curator_meta = product.get("curator") or {}
+    return {
+        "product": product,
+        "size_hint": size_hint,
+        "size_summary": _format_size(size_info),
+        "size_pack_count": size_info.pack_count,
+        "manual_merge_flag": bool(curator_meta.get("manual_merge_flag")),
+        "manual_merge_note": str(curator_meta.get("manual_merge_note") or ""),
+        "missing_photo": _is_missing_photo(product),
+        "standard_categories": STANDARD_CATEGORIES,
+    }
 
 
 @router.get("/products/{product_id}", response_class=HTMLResponse)
@@ -1079,28 +1630,36 @@ async def product_detail(
     if oid is None:
         return HTMLResponse("Invalid product ID", status_code=400)
     mongo = _get_mongo()
-    product = mongo.products.find_one({"_id": oid}, {"embedding": 0})
-    if not product:
+    payload = _product_detail_payload(mongo, oid)
+    if not payload:
         return HTMLResponse("Product not found", status_code=404)
-    product["_id"] = str(product["_id"])
-    size_info = _size_info_from_doc(product)
-    size_hint = _size_hint_from_size(size_info) or str(product.get("name") or "")
-    curator_meta = product.get("curator") or {}
     return templates.TemplateResponse(
         "products/detail.html",
         {
             "request": request,
-            "product": product,
-            "size_hint": size_hint,
-            "size_summary": _format_size(size_info),
-            "size_pack_count": size_info.pack_count,
-            "manual_merge_flag": bool(curator_meta.get("manual_merge_flag")),
-            "manual_merge_note": str(curator_meta.get("manual_merge_note") or ""),
-            "missing_photo": _is_missing_photo(product),
+            **payload,
             "message": message,
             "error": error,
-            "page_title": f"Edit: {product.get('name', '')[:40]}",
+            "page_title": f"Edit: {payload['product'].get('name', '')[:40]}",
             "active_nav": "products",
+        },
+    )
+
+
+@router.get("/products/{product_id}/section/content", response_class=HTMLResponse)
+async def product_detail_content_partial(request: Request, product_id: str):
+    oid = _object_id_or_none(product_id)
+    if oid is None:
+        return HTMLResponse("Invalid product ID", status_code=400)
+    mongo = _get_mongo()
+    payload = _product_detail_payload(mongo, oid)
+    if not payload:
+        return HTMLResponse("Product not found", status_code=404)
+    return templates.TemplateResponse(
+        "products/_detail_content.html",
+        {
+            "request": request,
+            **payload,
         },
     )
 
@@ -1120,7 +1679,15 @@ async def product_update(request: Request, product_id: str):
     name = str(form.get("name", "")).strip() or existing.get("name") or ""
     brand_input = str(form.get("brand", "")).strip() or None
     category_input = str(form.get("category", "")).strip() or None
-    size_hint = str(form.get("size_hint", "")).strip() or name
+    size_hint_raw = str(form.get("size_hint", "")).strip()
+    pack_qty_raw = str(form.get("pack_qty", "")).strip()
+    # Combine pack qty and size hint: "6" + "330ml" → "6x330ml"
+    if pack_qty_raw and size_hint_raw:
+        size_hint = f"{pack_qty_raw}x{size_hint_raw}"
+    elif pack_qty_raw:
+        size_hint = f"{pack_qty_raw} pack"
+    else:
+        size_hint = size_hint_raw or name
 
     normalized_name = normalize_name(name)
     normalized_brand = normalize_brand(brand_input)
@@ -1163,6 +1730,15 @@ async def product_update(request: Request, product_id: str):
     }
 
     mongo.products.update_one({"_id": oid}, {"$set": updates})
+    _mark_curator_snapshot_stale(
+        mongo,
+        reason="Products changed. Run Scan Now to refresh curator snapshot.",
+    )
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message="Product updated",
+            events=["admin:product-detail-refresh", "admin:products-refresh"],
+        )
     return RedirectResponse(f"/admin/products/{product_id}", status_code=303)
 
 
@@ -1170,11 +1746,15 @@ async def product_update(request: Request, product_id: str):
 async def product_flag_merge(request: Request, product_id: str):
     oid = _object_id_or_none(product_id)
     if oid is None:
+        if _is_hx_request(request):
+            return _hx_trigger_response(error="Invalid product ID")
         return _redirect_back(request, "/admin/products", error="Invalid product ID")
 
     mongo = _get_mongo()
     product = mongo.products.find_one({"_id": oid}, {"_id": 1})
     if not product:
+        if _is_hx_request(request):
+            return _hx_trigger_response(error="Product not found")
         return _redirect_back(request, "/admin/products", error="Product not found")
 
     form = await request.form()
@@ -1188,6 +1768,19 @@ async def product_flag_merge(request: Request, product_id: str):
         updates["curator.manual_merge_note"] = note
 
     mongo.products.update_one({"_id": oid}, {"$set": updates})
+    _mark_curator_snapshot_stale(
+        mongo,
+        reason="Merge flags changed. Run Scan Now to refresh curator snapshot.",
+    )
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message="Product flagged for merge review",
+            events=[
+                "admin:products-refresh",
+                "admin:product-detail-refresh",
+                "admin:curator-refresh",
+            ],
+        )
     return _redirect_back(request, "/admin/products", message="Product flagged for merge review")
 
 
@@ -1195,11 +1788,15 @@ async def product_flag_merge(request: Request, product_id: str):
 async def product_unflag_merge(request: Request, product_id: str):
     oid = _object_id_or_none(product_id)
     if oid is None:
+        if _is_hx_request(request):
+            return _hx_trigger_response(error="Invalid product ID")
         return _redirect_back(request, "/admin/products", error="Invalid product ID")
 
     mongo = _get_mongo()
     product = mongo.products.find_one({"_id": oid}, {"_id": 1})
     if not product:
+        if _is_hx_request(request):
+            return _hx_trigger_response(error="Product not found")
         return _redirect_back(request, "/admin/products", error="Product not found")
 
     mongo.products.update_one(
@@ -1213,20 +1810,94 @@ async def product_unflag_merge(request: Request, product_id: str):
             "$set": {"updated_at": datetime.utcnow()},
         },
     )
+    _mark_curator_snapshot_stale(
+        mongo,
+        reason="Merge flags changed. Run Scan Now to refresh curator snapshot.",
+    )
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message="Merge flag removed",
+            events=[
+                "admin:products-refresh",
+                "admin:product-detail-refresh",
+                "admin:curator-refresh",
+            ],
+        )
     return _redirect_back(request, "/admin/products", message="Merge flag removed")
 
 
 @router.delete("/products/{product_id}", response_class=HTMLResponse)
-async def product_delete(product_id: str):
+async def product_delete(request: Request, product_id: str):
     oid = _object_id_or_none(product_id)
     if oid is None:
+        if _is_hx_request(request):
+            return _hx_trigger_response(error="Invalid product ID", status_code=400)
         return HTMLResponse("", status_code=400)
     mongo = _get_mongo()
     mongo.products.delete_one({"_id": oid})
+    _mark_curator_snapshot_stale(
+        mongo,
+        reason="Products changed. Run Scan Now to refresh curator snapshot.",
+    )
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message="Product deleted",
+            events=["admin:products-refresh", "admin:dashboard-refresh", "admin:curator-refresh"],
+        )
     return HTMLResponse("")
 
 
+@router.post("/products/{product_id}/delete", response_class=HTMLResponse)
+async def product_delete_post(request: Request, product_id: str):
+    oid = _object_id_or_none(product_id)
+    if oid is None:
+        return _feedback_response(
+            request,
+            fallback_path="/admin/products",
+            error="Invalid product ID",
+            events=["admin:products-refresh"],
+        )
+    mongo = _get_mongo()
+    mongo.products.delete_one({"_id": oid})
+    _mark_curator_snapshot_stale(
+        mongo,
+        reason="Products changed. Run Scan Now to refresh curator snapshot.",
+    )
+    if (
+        _is_hx_request(request)
+        and request.headers.get("HX-Target") == "product-detail-content"
+    ):
+        response = templates.TemplateResponse(
+            "products/_deleted_notice.html",
+            {
+                "request": request,
+            },
+        )
+        response.headers["HX-Trigger"] = json.dumps(
+            {
+                "admin:notify": {"level": "success", "message": "Product deleted"},
+                "admin:products-refresh": True,
+                "admin:dashboard-refresh": True,
+                "admin:curator-refresh": True,
+            }
+        )
+        return response
+    return _feedback_response(
+        request,
+        fallback_path="/admin/products",
+        message="Product deleted",
+        events=["admin:products-refresh", "admin:dashboard-refresh", "admin:curator-refresh"],
+    )
+
+
 # ---- Stores ----
+
+
+def _stores_payload(mongo: MongoService) -> list[dict[str, Any]]:
+    sources = _load_sources()
+    pipeline = [{"$group": {"_id": "$store_id", "count": {"$sum": 1}}}]
+    counts = {row["_id"]: row["count"] for row in mongo.products.aggregate(pipeline)}
+    return _decorate_sources(sources, counts)
 
 
 @router.get("/stores", response_class=HTMLResponse)
@@ -1235,17 +1906,10 @@ async def store_list(
     message: str = Query("", alias="message"),
     error: str = Query("", alias="error"),
 ):
-    mongo = _get_mongo()
-    sources = _load_sources()
-    pipeline = [{"$group": {"_id": "$store_id", "count": {"$sum": 1}}}]
-    counts = {row["_id"]: row["count"] for row in mongo.products.aggregate(pipeline)}
-    decorated_sources = _decorate_sources(sources, counts)
-
     return templates.TemplateResponse(
         "stores/list.html",
         {
             "request": request,
-            "sources": decorated_sources,
             "message": message,
             "error": error,
             "page_title": "Stores",
@@ -1254,8 +1918,21 @@ async def store_list(
     )
 
 
+@router.get("/stores/sections/table", response_class=HTMLResponse)
+async def store_table_partial(request: Request):
+    mongo = _get_mongo()
+    return templates.TemplateResponse(
+        "stores/_table.html",
+        {
+            "request": request,
+            "sources": _stores_payload(mongo),
+        },
+    )
+
+
 @router.post("/stores", response_class=HTMLResponse)
 async def store_create(
+    request: Request,
     source_id: str = Form(...),
     store_name: str = Form(...),
     base_url: str = Form(...),
@@ -1270,13 +1947,19 @@ async def store_create(
     clean_currency = currency.strip().upper() or "JMD"
 
     if not normalized_source_id or not clean_store_name or not clean_base_url:
-        msg = quote_plus("Source ID, store name, and base URL are required")
-        return RedirectResponse(f"/admin/stores?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/stores",
+            error="Source ID, store name, and base URL are required",
+        )
 
     sources = _load_sources()
     if any(source.get("source_id") == normalized_source_id for source in sources):
-        msg = quote_plus(f"Store source '{normalized_source_id}' already exists")
-        return RedirectResponse(f"/admin/stores?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/stores",
+            error=f"Store source '{normalized_source_id}' already exists",
+        )
 
     selected_strategy = strategy.strip().lower() or "none"
     if selected_strategy not in {"none", "playwright", "loccloud", "manual"}:
@@ -1313,8 +1996,13 @@ async def store_create(
     }
 
     _append_source(new_source)
-    msg = quote_plus(f"Added store source '{normalized_source_id}'")
-    return RedirectResponse(f"/admin/stores?message={msg}", status_code=303)
+    return _feedback_response(
+        request,
+        fallback_path="/admin/stores",
+        message=f"Added store source '{normalized_source_id}'",
+        events=["admin:stores-refresh", "admin:dashboard-refresh"],
+        reset_form_id="stores-create-form",
+    )
 
 
 # ---- Scrapes ----
@@ -1348,7 +2036,7 @@ async def scrape_list(
 
 
 @router.post("/scrapes/start", response_class=HTMLResponse)
-async def start_scrape(store_id: str = Form(...)):
+async def start_scrape(request: Request, store_id: str = Form(...)):
     mongo = _get_mongo()
     existing = mongo.jobs.find_one(
         {
@@ -1357,8 +2045,12 @@ async def start_scrape(store_id: str = Form(...)):
         }
     )
     if existing:
-        msg = quote_plus(f"A scrape is already active for '{store_id}'")
-        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            error=f"A scrape is already active for '{store_id}'",
+            events=["admin:scrapes-refresh"],
+        )
 
     thread = threading.Thread(
         target=run_scrape,
@@ -1368,70 +2060,119 @@ async def start_scrape(store_id: str = Form(...)):
     thread.start()
     LOGGER.info("Started scrape for %s in background thread", store_id)
 
-    msg = quote_plus(f"Started scrape for '{store_id}'")
-    return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
+    return _feedback_response(
+        request,
+        fallback_path="/admin/scrapes",
+        message=f"Started scrape for '{store_id}'",
+        events=["admin:scrapes-refresh", "admin:dashboard-refresh"],
+        reset_form_id="scrape-start-form",
+    )
 
 
 @router.post("/scrapes/{job_id}/stop", response_class=HTMLResponse)
-async def stop_scrape(job_id: str):
+async def stop_scrape(request: Request, job_id: str):
     if not ObjectId.is_valid(job_id):
-        msg = quote_plus("Invalid job ID")
-        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            error="Invalid job ID",
+            events=["admin:scrapes-refresh"],
+        )
 
     mongo = _get_mongo()
     oid = ObjectId(job_id)
     job = mongo.jobs.find_one({"_id": oid})
     if not job:
-        msg = quote_plus("Scrape job not found")
-        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            error="Scrape job not found",
+            events=["admin:scrapes-refresh"],
+        )
 
     status = job.get("status")
     if status == "cancel_requested":
-        msg = quote_plus("Cancel already requested for this scrape")
-        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            error="Cancel already requested for this scrape",
+            events=["admin:scrapes-refresh"],
+        )
 
     if status not in {"running", "stopping"}:
-        msg = quote_plus("Only running scrapes can be stopped")
-        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            error="Only running scrapes can be stopped",
+            events=["admin:scrapes-refresh"],
+        )
 
     if status == "stopping":
-        msg = quote_plus("Stop already requested for this scrape")
-        return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            message="Stop already requested for this scrape",
+            events=["admin:scrapes-refresh"],
+        )
 
     mongo.update_job(oid, {"status": "stopping"})
     LOGGER.info("Stop requested for scrape job %s", job_id)
 
-    msg = quote_plus("Stop requested. The scraper will stop safely on its next checkpoint")
-    return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
+    return _feedback_response(
+        request,
+        fallback_path="/admin/scrapes",
+        message="Stop requested. The scraper will stop safely on its next checkpoint",
+        events=["admin:scrapes-refresh", "admin:dashboard-refresh"],
+    )
 
 
 @router.post("/scrapes/{job_id}/cancel", response_class=HTMLResponse)
-async def cancel_scrape(job_id: str):
+async def cancel_scrape(request: Request, job_id: str):
     if not ObjectId.is_valid(job_id):
-        msg = quote_plus("Invalid job ID")
-        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            error="Invalid job ID",
+            events=["admin:scrapes-refresh"],
+        )
 
     mongo = _get_mongo()
     oid = ObjectId(job_id)
     job = mongo.jobs.find_one({"_id": oid})
     if not job:
-        msg = quote_plus("Scrape job not found")
-        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            error="Scrape job not found",
+            events=["admin:scrapes-refresh"],
+        )
 
     status = job.get("status")
     if status == "cancel_requested":
-        msg = quote_plus("Cancel already requested for this scrape")
-        return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            message="Cancel already requested for this scrape",
+            events=["admin:scrapes-refresh"],
+        )
 
     if status not in {"running", "stopping"}:
-        msg = quote_plus("Only running scrapes can be cancelled")
-        return RedirectResponse(f"/admin/scrapes?error={msg}", status_code=303)
+        return _feedback_response(
+            request,
+            fallback_path="/admin/scrapes",
+            error="Only running scrapes can be cancelled",
+            events=["admin:scrapes-refresh"],
+        )
 
     mongo.update_job(oid, {"status": "cancel_requested"})
     LOGGER.info("Cancel requested for scrape job %s", job_id)
 
-    msg = quote_plus("Cancel requested. The scraper will stop and mark the job as cancelled.")
-    return RedirectResponse(f"/admin/scrapes?message={msg}", status_code=303)
+    return _feedback_response(
+        request,
+        fallback_path="/admin/scrapes",
+        message="Cancel requested. The scraper will stop and mark the job as cancelled.",
+        events=["admin:scrapes-refresh", "admin:dashboard-refresh"],
+    )
 
 
 @router.get("/scrapes/status", response_class=HTMLResponse)
@@ -1452,6 +2193,84 @@ async def scrape_status(request: Request):
 # ---- Curator ----
 
 
+@router.get("/curator/review/{normalized_name:path}", response_class=HTMLResponse)
+async def curator_review(
+    request: Request,
+    normalized_name: str,
+    message: str = Query("", alias="message"),
+    error: str = Query("", alias="error"),
+):
+    """Review page showing all products that share a normalized_name, with inline actions."""
+    mongo = _get_mongo()
+    key = _normalize_cluster_name(normalized_name)
+    if not key:
+        return _feedback_response(
+            request,
+            fallback_path="/admin/curator",
+            error="Invalid product name",
+        )
+    docs = list(mongo.products.find({"normalized_name": key}))
+    if not docs:
+        return _feedback_response(
+            request,
+            fallback_path="/admin/curator",
+            error=f"No products found for '{normalized_name}'",
+        )
+
+    # Enrich each doc with display helpers
+    brands: set[str] = set()
+    categories: set[str] = set()
+    stores: set[str] = set()
+    for doc in docs:
+        doc["_id"] = str(doc["_id"])
+        si = _size_info_from_doc(doc)
+        doc["_pack_label"] = _format_pack(si)
+        doc["_measure_label"] = _format_measure(si)
+        doc["_size_label"] = _format_size(si)
+        doc["_has_image"] = bool(
+            doc.get("image_url")
+            and not str(doc.get("image_url", "")).startswith("data:image/svg")
+        )
+        brand = doc.get("brand")
+        if brand:
+            brands.add(brand)
+        cat = doc.get("category")
+        if cat:
+            categories.add(cat)
+        store = doc.get("store_name") or doc.get("store_id") or ""
+        if store:
+            stores.add(store)
+
+    # Detect conflict types present
+    has_brand_conflict = len(brands) > 1
+    has_category_conflict = len(categories) > 1
+    size_sigs = _known_size_signatures_from_docs(docs)
+    has_mixed_sizes = len(size_sigs) > 1
+    can_merge = len(docs) > 1 and not has_mixed_sizes
+
+    return templates.TemplateResponse(
+        "curator/review.html",
+        {
+            "request": request,
+            "normalized_name": key,
+            "products": docs,
+            "product_count": len(docs),
+            "brands": sorted(brands),
+            "categories": sorted(categories),
+            "stores": sorted(stores),
+            "has_brand_conflict": has_brand_conflict,
+            "has_category_conflict": has_category_conflict,
+            "has_mixed_sizes": has_mixed_sizes,
+            "can_merge": can_merge,
+            "standard_categories": STANDARD_CATEGORIES,
+            "message": message,
+            "error": error,
+            "page_title": f"Review: {docs[0].get('name', key)}",
+            "active_nav": "curator",
+        },
+    )
+
+
 @router.get("/curator", response_class=HTMLResponse)
 async def curator_page(
     request: Request,
@@ -1459,35 +2278,10 @@ async def curator_page(
     message: str = Query("", alias="message"),
     error: str = Query("", alias="error"),
 ):
-    mongo = _get_mongo()
-    brand_conflicts, category_conflicts, match_key_conflicts = _collect_curator_conflicts(
-        mongo,
-        top_k=limit,
-    )
-    manual_merge_flags, flagged_product_total = _collect_manual_merge_flags(mongo, top_k=limit)
-    name_cleanup_candidates, name_cleanup_total = _collect_name_cleanup_candidates(
-        mongo,
-        top_k=limit,
-    )
-    missing_photo_candidates, missing_photo_total = _collect_missing_photo_candidates(
-        mongo,
-        top_k=limit,
-    )
-    recent_actions = _list_recent_curator_actions(mongo)
     return templates.TemplateResponse(
         "curator/list.html",
         {
             "request": request,
-            "brand_conflicts": brand_conflicts,
-            "category_conflicts": category_conflicts,
-            "match_key_conflicts": match_key_conflicts,
-            "manual_merge_flags": manual_merge_flags,
-            "flagged_product_total": flagged_product_total,
-            "name_cleanup_candidates": name_cleanup_candidates,
-            "name_cleanup_total": name_cleanup_total,
-            "missing_photo_candidates": missing_photo_candidates,
-            "missing_photo_total": missing_photo_total,
-            "recent_actions": recent_actions,
             "limit": limit,
             "message": message,
             "error": error,
@@ -1497,131 +2291,409 @@ async def curator_page(
     )
 
 
+@router.post("/curator/scan", response_class=HTMLResponse)
+async def curator_scan_now(
+    request: Request,
+    limit: int = Form(25),
+):
+    mongo = _get_mongo()
+    snapshot = _refresh_curator_snapshot(mongo, row_cap=CURATOR_SNAPSHOT_ROW_CAP)
+    generated_at = snapshot.get("generated_at")
+    generated_text = (
+        f"{generated_at.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        if isinstance(generated_at, datetime)
+        else "just now"
+    )
+    row_cap = snapshot.get("row_cap", CURATOR_SNAPSHOT_ROW_CAP)
+    return _curator_feedback(
+        request,
+        limit=limit,
+        message=(
+            f"Curator scan complete. Cached up to {row_cap} "
+            f"rows per section at {generated_text}."
+        ),
+        mark_snapshot_stale=False,
+    )
+
+
+_SECTION_EVENTS: dict[str, list[str]] = {
+    "conflicts": ["admin:curator-refresh-conflicts", "admin:curator-refresh-summary"],
+    "manual-flags": ["admin:curator-refresh-flags", "admin:curator-refresh-summary"],
+    "name-size": ["admin:curator-refresh-name-size", "admin:curator-refresh-summary"],
+    "missing-photos": ["admin:curator-refresh-photos", "admin:curator-refresh-summary"],
+}
+
+_SECTION_LABELS: dict[str, str] = {
+    "conflicts": "Conflicts (Match Key / Brand / Category)",
+    "manual-flags": "Manual Merge Flags",
+    "name-size": "Name & Size Normalization",
+    "missing-photos": "Missing Photos",
+}
+
+
+@router.post("/curator/scan/{section}", response_class=HTMLResponse)
+async def curator_scan_section(
+    request: Request,
+    section: str,
+    limit: int = Form(25),
+):
+    if section not in _SECTION_EVENTS:
+        return _curator_feedback(request, limit=limit, error=f"Unknown section: {section}")
+    mongo = _get_mongo()
+    _refresh_curator_section(mongo, section, row_cap=CURATOR_SNAPSHOT_ROW_CAP)
+    label = _SECTION_LABELS.get(section, section)
+    events = _SECTION_EVENTS[section]
+    if _is_hx_request(request):
+        return _hx_trigger_response(
+            message=f"Scanned {label}.",
+            events=events,
+        )
+    return _feedback_response(
+        request,
+        fallback_path="/admin/curator",
+        message=f"Scanned {label}.",
+        events=["admin:curator-refresh"],
+        extra_params={"limit": limit},
+    )
+
+
+@router.get("/curator/summary", response_class=HTMLResponse)
+async def curator_summary_partial(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    snapshot = _load_curator_snapshot(mongo, ensure=True)
+    row_limit = _curator_row_limit(limit)
+    match_key_conflicts = _snapshot_rows(snapshot, "match_key_conflicts", row_limit)
+    brand_conflicts = _snapshot_rows(snapshot, "brand_conflicts", row_limit)
+    category_conflicts = _snapshot_rows(snapshot, "category_conflicts", row_limit)
+    name_cleanup_candidates = _snapshot_rows(snapshot, "name_cleanup_candidates", row_limit)
+
+    return templates.TemplateResponse(
+        "curator/_summary.html",
+        {
+            "request": request,
+            "row_limit": row_limit,
+            "snapshot_generated_at": snapshot.get("generated_at"),
+            "snapshot_stale": bool(snapshot.get("stale")),
+            "snapshot_stale_reason": str(snapshot.get("stale_reason") or ""),
+            "snapshot_row_cap": int(snapshot.get("row_cap") or CURATOR_SNAPSHOT_ROW_CAP),
+            "match_key_conflict_count": len(match_key_conflicts),
+            "brand_conflict_count": len(brand_conflicts),
+            "category_conflict_count": len(category_conflicts),
+            "flagged_product_total": int(snapshot.get("flagged_product_total") or 0),
+            "name_cleanup_total": len(name_cleanup_candidates),
+            "missing_photo_total": int(snapshot.get("missing_photo_total") or 0),
+        },
+    )
+
+
+@router.get("/curator/sections/manual-flags", response_class=HTMLResponse)
+async def curator_manual_flags_partial(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    snapshot = _load_curator_snapshot(mongo, ensure=True)
+    row_limit = _curator_row_limit(limit)
+    manual_merge_flags = _snapshot_rows(snapshot, "manual_merge_flags", row_limit)
+    flagged_product_total = int(snapshot.get("flagged_product_total") or 0)
+    return templates.TemplateResponse(
+        "curator/_manual_flags.html",
+        {
+            "request": request,
+            "manual_merge_flags": manual_merge_flags,
+            "flagged_product_total": flagged_product_total,
+            "limit": row_limit,
+        },
+    )
+
+
+@router.get("/curator/sections/conflicts", response_class=HTMLResponse)
+async def curator_conflicts_partial(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    snapshot = _load_curator_snapshot(mongo, ensure=True)
+    row_limit = _curator_row_limit(limit)
+    brand_conflicts = _snapshot_rows(snapshot, "brand_conflicts", row_limit)
+    category_conflicts = _snapshot_rows(snapshot, "category_conflicts", row_limit)
+    match_key_conflicts = _snapshot_rows(snapshot, "match_key_conflicts", row_limit)
+    return templates.TemplateResponse(
+        "curator/_conflicts.html",
+        {
+            "request": request,
+            "brand_conflicts": brand_conflicts,
+            "category_conflicts": category_conflicts,
+            "match_key_conflicts": match_key_conflicts,
+            "standard_categories": STANDARD_CATEGORIES,
+            "limit": row_limit,
+        },
+    )
+
+
+@router.get("/curator/sections/name-size", response_class=HTMLResponse)
+async def curator_name_size_partial(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    snapshot = _load_curator_snapshot(mongo, ensure=True)
+    row_limit = _curator_row_limit(limit)
+    name_cleanup_candidates = _snapshot_rows(snapshot, "name_cleanup_candidates", row_limit)
+    name_cleanup_total = int(snapshot.get("name_cleanup_total") or 0)
+    return templates.TemplateResponse(
+        "curator/_name_size.html",
+        {
+            "request": request,
+            "name_cleanup_candidates": name_cleanup_candidates,
+            "name_cleanup_total": name_cleanup_total,
+            "limit": row_limit,
+        },
+    )
+
+
+@router.get("/curator/sections/missing-photos", response_class=HTMLResponse)
+async def curator_missing_photos_partial(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    snapshot = _load_curator_snapshot(mongo, ensure=True)
+    row_limit = _curator_row_limit(limit)
+    missing_photo_candidates = _snapshot_rows(snapshot, "missing_photo_candidates", row_limit)
+    missing_photo_total = int(snapshot.get("missing_photo_total") or 0)
+    return templates.TemplateResponse(
+        "curator/_missing_photos.html",
+        {
+            "request": request,
+            "missing_photo_candidates": missing_photo_candidates,
+            "missing_photo_total": missing_photo_total,
+            "limit": row_limit,
+        },
+    )
+
+
+@router.get("/curator/sections/actions", response_class=HTMLResponse)
+async def curator_actions_partial(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    recent_actions = _list_recent_curator_actions(mongo)
+    return templates.TemplateResponse(
+        "curator/_actions.html",
+        {
+            "request": request,
+            "recent_actions": recent_actions,
+            "limit": limit,
+        },
+    )
+
+
+def _curator_feedback(
+    request: Request,
+    *,
+    limit: int,
+    message: str | None = None,
+    error: str | None = None,
+    mongo: MongoService | None = None,
+    refresh_snapshot: bool = True,
+    mark_snapshot_stale: bool = True,
+    hx_body: str | None = None,
+) -> HTMLResponse | RedirectResponse:
+    if mark_snapshot_stale and message and not error:
+        active_mongo = mongo or _get_mongo()
+        if refresh_snapshot:
+            try:
+                _refresh_curator_snapshot(
+                    active_mongo,
+                    row_cap=CURATOR_SNAPSHOT_ROW_CAP,
+                )
+            except Exception as exc:  # pragma: no cover
+                LOGGER.warning("Unable to refresh curator snapshot after action: %s", exc)
+                _mark_curator_snapshot_stale(
+                    active_mongo,
+                    reason="Curator action changed data. Run Scan Now to refresh snapshot.",
+                )
+        else:
+            _mark_curator_snapshot_stale(
+                active_mongo,
+                reason="Curator action changed data. Run Scan Now to refresh snapshot.",
+            )
+    if hx_body is not None and _is_hx_request(request):
+        return _hx_trigger_response(
+            message=message,
+            error=error,
+            events=["admin:curator-refresh-summary", "admin:dashboard-refresh"],
+            body=hx_body,
+        )
+    return _feedback_response(
+        request,
+        fallback_path="/admin/curator",
+        message=message,
+        error=error,
+        events=["admin:curator-refresh", "admin:products-refresh", "admin:dashboard-refresh"],
+        extra_params={"limit": limit},
+    )
+
+
 @router.post("/curator/merge", response_class=HTMLResponse)
 async def curator_merge_cluster(
+    request: Request,
     normalized_name: str = Form(...),
     limit: int = Form(25),
 ):
     mongo = _get_mongo()
     key = _normalize_cluster_name(normalized_name)
     if not key:
-        msg = quote_plus("Invalid cluster name")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error="Invalid cluster name")
     try:
         result = _execute_merge_cluster(mongo, key)
     except ValueError as exc:
-        msg = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error=str(exc))
 
-    msg = quote_plus(
-        f"Merged {result['docs']} products for '{result['canonical_name']}'. "
-        f"Removed {result['duplicates_removed']} duplicates. Action #{result['action_id']}."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body="",
+        message=(
+            f"Merged {result['docs']} products for '{result['canonical_name']}'. "
+            f"Removed {result['duplicates_removed']} duplicates. Action #{result['action_id']}."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/normalize-brand", response_class=HTMLResponse)
 async def curator_normalize_brand(
+    request: Request,
     normalized_name: str = Form(...),
     limit: int = Form(25),
 ):
     mongo = _get_mongo()
     key = _normalize_cluster_name(normalized_name)
     if not key:
-        msg = quote_plus("Invalid cluster name")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error="Invalid cluster name")
     try:
         result = _execute_normalize_brand_cluster(mongo, key)
     except ValueError as exc:
-        msg = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error=str(exc))
 
-    msg = quote_plus(
-        f"Normalized brand to '{result['dominant_brand']}' for {result['docs']} products "
-        f"({result['updated']} updated). Action #{result['action_id']}."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body="",
+        message=(
+            f"Normalized brand to '{result['dominant_brand']}' for {result['docs']} products "
+            f"({result['updated']} updated). Action #{result['action_id']}."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/normalize-category", response_class=HTMLResponse)
 async def curator_normalize_category(
+    request: Request,
     normalized_name: str = Form(...),
+    target_category: str = Form(""),
     limit: int = Form(25),
 ):
     mongo = _get_mongo()
     key = _normalize_cluster_name(normalized_name)
     if not key:
-        msg = quote_plus("Invalid cluster name")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error="Invalid cluster name")
     try:
-        result = _execute_normalize_category_cluster(mongo, key)
+        result = _execute_normalize_category_cluster(
+            mongo,
+            key,
+            target_category=target_category.strip() or None,
+        )
     except ValueError as exc:
-        msg = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error=str(exc))
 
-    msg = quote_plus(
-        f"Normalized category to '{result['dominant_category']}' for {result['docs']} products "
-        f"({result['updated']} updated). Action #{result['action_id']}."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body="",
+        message=(
+            f"Normalized category to '{result['dominant_category']}' for {result['docs']} products "
+            f"({result['updated']} updated). Action #{result['action_id']}."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/normalize-name-size", response_class=HTMLResponse)
 async def curator_normalize_name_size(
+    request: Request,
     product_id: str = Form(...),
     limit: int = Form(25),
 ):
     oid = _object_id_or_none(product_id)
     if oid is None:
-        msg = quote_plus("Invalid product ID")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error="Invalid product ID")
 
     mongo = _get_mongo()
     try:
         result = _execute_normalize_name_size_product(mongo, oid)
     except ValueError as exc:
-        msg = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error=str(exc))
 
-    msg = quote_plus(
-        f"Normalized '{result['original_name']}' -> '{result['cleaned_name']}'. "
-        f"Size now {result['size_label']}. Action #{result['action_id']}."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body="",
+        message=(
+            f"Normalized '{result['original_name']}' -> '{result['cleaned_name']}'. "
+            f"Size now {result['size_label']}. Action #{result['action_id']}."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/flags/clear", response_class=HTMLResponse)
 async def curator_clear_manual_flags(
+    request: Request,
     normalized_name: str = Form(...),
     limit: int = Form(25),
 ):
     key = _normalize_cluster_name(normalized_name)
     if not key:
-        msg = quote_plus("Invalid cluster name")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error="Invalid cluster name")
 
     mongo = _get_mongo()
     try:
         result = _execute_clear_manual_flags_cluster(mongo, key)
     except ValueError as exc:
-        msg = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error=str(exc))
 
-    msg = quote_plus(
-        f"Cleared {result['cleared']} manual flags for '{key}'. Action #{result['action_id']}."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body="",
+        message=(
+            f"Cleared {result['cleared']} manual flags for '{key}'. "
+            f"Action #{result['action_id']}."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/merge-all", response_class=HTMLResponse)
-async def curator_merge_all(limit: int = Form(25)):
-    mongo = _get_mongo()
-    _, _, match_key_conflicts = _collect_curator_conflicts(mongo, top_k=5000)
-    keys = [str(row.get("normalized_name") or "").strip() for row in match_key_conflicts]
-    keys = [key for key in keys if key]
+async def curator_merge_all(request: Request, limit: int = Form(25)):
+    form = await request.form()
+    keys = _visible_cluster_keys(form)
     if not keys:
-        msg = quote_plus("No match-key conflicts available to merge")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No visible match-key conflicts selected to merge",
+        )
+
+    mongo = _get_mongo()
 
     merged_clusters = 0
     merged_docs = 0
@@ -1638,25 +2710,36 @@ async def curator_merge_all(limit: int = Form(25)):
         removed_docs += int(result["duplicates_removed"])
 
     if merged_clusters == 0:
-        msg = quote_plus("No clusters were eligible for merge-all")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No clusters were eligible for merge-all",
+        )
 
-    msg = quote_plus(
-        f"Merged {merged_clusters} match-key clusters ({merged_docs} docs, "
-        f"removed {removed_docs}, skipped {skipped})."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body=_EMPTY_ROW_MATCH_KEY,
+        message=(
+            f"Merged {merged_clusters} match-key clusters ({merged_docs} docs, "
+            f"removed {removed_docs}, skipped {skipped})."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/flags/merge-all", response_class=HTMLResponse)
-async def curator_merge_all_flagged(limit: int = Form(25)):
-    mongo = _get_mongo()
-    flagged_clusters, _ = _collect_manual_merge_flags(mongo, top_k=5000)
-    keys = [str(row.get("normalized_name") or "").strip() for row in flagged_clusters]
-    keys = [key for key in keys if key]
+async def curator_merge_all_flagged(request: Request, limit: int = Form(25)):
+    form = await request.form()
+    keys = _visible_cluster_keys(form)
     if not keys:
-        msg = quote_plus("No manually flagged clusters available to merge")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No visible manually flagged clusters selected to merge",
+        )
+
+    mongo = _get_mongo()
 
     merged_clusters = 0
     merged_docs = 0
@@ -1673,25 +2756,36 @@ async def curator_merge_all_flagged(limit: int = Form(25)):
         removed_docs += int(result["duplicates_removed"])
 
     if merged_clusters == 0:
-        msg = quote_plus("No manually flagged clusters were eligible to merge")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No manually flagged clusters were eligible to merge",
+        )
 
-    msg = quote_plus(
-        f"Merged {merged_clusters} manually flagged clusters ({merged_docs} docs, "
-        f"removed {removed_docs}, skipped {skipped})."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body=_EMPTY_ROW_FLAGS,
+        message=(
+            f"Merged {merged_clusters} manually flagged clusters ({merged_docs} docs, "
+            f"removed {removed_docs}, skipped {skipped})."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/flags/clear-all", response_class=HTMLResponse)
-async def curator_clear_all_manual_flags(limit: int = Form(25)):
-    mongo = _get_mongo()
-    flagged_clusters, _ = _collect_manual_merge_flags(mongo, top_k=5000)
-    keys = [str(row.get("normalized_name") or "").strip() for row in flagged_clusters]
-    keys = [key for key in keys if key]
+async def curator_clear_all_manual_flags(request: Request, limit: int = Form(25)):
+    form = await request.form()
+    keys = _visible_cluster_keys(form)
     if not keys:
-        msg = quote_plus("No manual merge flags found to clear")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No visible manual flags selected to clear",
+        )
+
+    mongo = _get_mongo()
 
     cleared = 0
     clusters = 0
@@ -1706,25 +2800,36 @@ async def curator_clear_all_manual_flags(limit: int = Form(25)):
         cleared += int(result["cleared"])
 
     if clusters == 0:
-        msg = quote_plus("No manual flags were eligible to clear")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No manual flags were eligible to clear",
+        )
 
-    msg = quote_plus(
-        f"Cleared {cleared} manual merge flags across {clusters} clusters "
-        f"(skipped {skipped})."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body=_EMPTY_ROW_FLAGS,
+        message=(
+            f"Cleared {cleared} manual merge flags across {clusters} clusters "
+            f"(skipped {skipped})."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/normalize-brand-all", response_class=HTMLResponse)
-async def curator_normalize_brand_all(limit: int = Form(25)):
-    mongo = _get_mongo()
-    brand_conflicts, _, _ = _collect_curator_conflicts(mongo, top_k=5000)
-    keys = [str(row.get("normalized_name") or "").strip() for row in brand_conflicts]
-    keys = [key for key in keys if key]
+async def curator_normalize_brand_all(request: Request, limit: int = Form(25)):
+    form = await request.form()
+    keys = _visible_cluster_keys(form)
     if not keys:
-        msg = quote_plus("No brand conflicts found to normalize")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No visible brand conflicts selected to normalize",
+        )
+
+    mongo = _get_mongo()
 
     clusters = 0
     updated = 0
@@ -1739,25 +2844,36 @@ async def curator_normalize_brand_all(limit: int = Form(25)):
         updated += int(result["updated"])
 
     if clusters == 0:
-        msg = quote_plus("No brand conflicts were eligible to normalize")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No brand conflicts were eligible to normalize",
+        )
 
-    msg = quote_plus(
-        f"Normalized brand labels across {clusters} clusters "
-        f"({updated} products updated, skipped {skipped})."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body=_EMPTY_ROW_BRAND,
+        message=(
+            f"Normalized brand labels across {clusters} clusters "
+            f"({updated} products updated, skipped {skipped})."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/normalize-category-all", response_class=HTMLResponse)
-async def curator_normalize_category_all(limit: int = Form(25)):
-    mongo = _get_mongo()
-    _, category_conflicts, _ = _collect_curator_conflicts(mongo, top_k=5000)
-    keys = [str(row.get("normalized_name") or "").strip() for row in category_conflicts]
-    keys = [key for key in keys if key]
+async def curator_normalize_category_all(request: Request, limit: int = Form(25)):
+    form = await request.form()
+    keys = _visible_cluster_keys(form)
     if not keys:
-        msg = quote_plus("No category conflicts found to normalize")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No visible category conflicts selected to normalize",
+        )
+
+    mongo = _get_mongo()
 
     clusters = 0
     updated = 0
@@ -1772,32 +2888,40 @@ async def curator_normalize_category_all(limit: int = Form(25)):
         updated += int(result["updated"])
 
     if clusters == 0:
-        msg = quote_plus("No category conflicts were eligible to normalize")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No category conflicts were eligible to normalize",
+        )
 
-    msg = quote_plus(
-        f"Normalized categories across {clusters} clusters "
-        f"({updated} products updated, skipped {skipped})."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body=_EMPTY_ROW_CATEGORY,
+        message=(
+            f"Normalized categories across {clusters} clusters "
+            f"({updated} products updated, skipped {skipped})."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/normalize-name-size-all", response_class=HTMLResponse)
-async def curator_normalize_name_size_all(limit: int = Form(25)):
-    mongo = _get_mongo()
-    candidates, _ = _collect_name_cleanup_candidates(mongo, top_k=200000)
-    product_ids = [row.get("product_id") for row in candidates if row.get("product_id")]
+async def curator_normalize_name_size_all(request: Request, limit: int = Form(25)):
+    form = await request.form()
+    product_ids = _visible_product_ids(form)
     if not product_ids:
-        msg = quote_plus("No name/size cleanup candidates found")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No visible name/size rows selected to normalize",
+        )
+
+    mongo = _get_mongo()
 
     updated = 0
     skipped = 0
-    for product_id in product_ids:
-        oid = _object_id_or_none(str(product_id))
-        if oid is None:
-            skipped += 1
-            continue
+    for oid in product_ids:
         try:
             _execute_normalize_name_size_product(mongo, oid)
         except ValueError:
@@ -1806,19 +2930,35 @@ async def curator_normalize_name_size_all(limit: int = Form(25)):
         updated += 1
 
     if updated == 0:
-        msg = quote_plus("No name/size candidates were eligible to normalize")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No name/size candidates were eligible to normalize",
+        )
 
-    msg = quote_plus(
-        f"Normalized names/sizes for {updated} products (skipped {skipped})."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body=_EMPTY_ROW_NAME_SIZE,
+        message=f"Normalized names/sizes for {updated} products (skipped {skipped}).",
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/photos/queue-all", response_class=HTMLResponse)
-async def curator_queue_missing_photos(limit: int = Form(25)):
+async def curator_queue_missing_photos(request: Request, limit: int = Form(25)):
+    form = await request.form()
+    product_ids = _visible_product_ids(form)
+    if not product_ids:
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No visible missing-photo rows selected to queue",
+        )
+
     mongo = _get_mongo()
     missing_photo_query = {
+        "_id": {"$in": product_ids},
         "$or": [
             {"image_url": {"$in": [None, ""]}},
             {"image_url": {"$regex": "^data:", "$options": "i"}},
@@ -1835,40 +2975,49 @@ async def curator_queue_missing_photos(limit: int = Form(25)):
     updated = int(getattr(result, "modified_count", 0))
     matched = int(getattr(result, "matched_count", 0))
     if matched == 0:
-        msg = quote_plus("No missing-photo products found to queue")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="No missing-photo products found to queue",
+        )
 
-    msg = quote_plus(
-        f"Queued {updated} missing-photo products for upload triage "
-        f"({matched} matched)."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        hx_body=_EMPTY_ROW_PHOTOS,
+        message=(
+            f"Queued {updated} missing-photo products for upload triage "
+            f"({matched} matched)."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)
 
 
 @router.post("/curator/actions/{action_id}/undo", response_class=HTMLResponse)
 async def curator_undo_action(
+    request: Request,
     action_id: str,
     limit: int = Form(25),
 ):
     if not ObjectId.is_valid(action_id):
-        msg = quote_plus("Invalid action ID")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error="Invalid action ID")
 
     mongo = _get_mongo()
     oid = ObjectId(action_id)
     action = mongo.curator_actions.find_one({"_id": oid})
     if not action:
-        msg = quote_plus("Curator action not found")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error="Curator action not found")
     if action.get("status") == "undone":
-        msg = quote_plus("Action has already been undone")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(request, limit=limit, error="Action has already been undone")
 
     before_docs = action.get("before_docs") or []
     after_docs = action.get("after_docs") or []
     if not before_docs:
-        msg = quote_plus("Action has no stored snapshot to restore")
-        return RedirectResponse(f"/admin/curator?limit={limit}&error={msg}", status_code=303)
+        return _curator_feedback(
+            request,
+            limit=limit,
+            error="Action has no stored snapshot to restore",
+        )
 
     before_ids = {
         doc.get("_id")
@@ -1903,7 +3052,12 @@ async def curator_undo_action(
         },
     )
 
-    msg = quote_plus(
-        f"Undid action {action_id}: restored {restored} products, removed {removed} products."
+    return _curator_feedback(
+        request,
+        limit=limit,
+        mongo=mongo,
+        message=(
+            f"Undid action {action_id}: restored {restored} products, "
+            f"removed {removed} products."
+        ),
     )
-    return RedirectResponse(f"/admin/curator?limit={limit}&message={msg}", status_code=303)

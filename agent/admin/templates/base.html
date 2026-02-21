@@ -23,7 +23,7 @@
 </head>
 <body class="min-h-full bg-panel text-gray-900 antialiased">
   <div class="min-h-screen md:flex">
-    <aside class="hidden md:flex w-64 flex-col bg-gray-900 text-gray-300">
+    <aside class="hidden md:flex w-48 flex-col bg-gray-900 text-gray-300">
       <div class="px-5 py-5 border-b border-gray-700">
         <h1 class="text-lg font-bold text-white">Brite Admin</h1>
         <p class="text-xs text-gray-500 mt-1">Catalog Engine</p>
@@ -63,9 +63,132 @@
       </header>
 
       <main class="px-4 py-5 md:px-8 md:py-7">
+        <div id="admin-flash" class="mb-4 hidden"></div>
         {% block content %}{% endblock %}
       </main>
     </div>
   </div>
+  <script>
+    (() => {
+      const flash = document.getElementById('admin-flash');
+      let flashTimer = null;
+
+      const detailValue = (event) => {
+        if (!event || !event.detail) {
+          return null;
+        }
+        if (event.detail.value && typeof event.detail.value === 'object') {
+          return event.detail.value;
+        }
+        if (typeof event.detail === 'object') {
+          return event.detail;
+        }
+        return null;
+      };
+
+      const showFlash = (level, message) => {
+        if (!flash || !message) {
+          return;
+        }
+        const tone = level === 'error'
+          ? 'border-red-200 bg-red-50 text-red-700'
+          : 'border-green-200 bg-green-50 text-green-700';
+        flash.className = `mb-4 rounded-lg border px-4 py-3 text-sm ${tone}`;
+        flash.textContent = message;
+        flash.classList.remove('hidden');
+        if (flashTimer) {
+          window.clearTimeout(flashTimer);
+        }
+        flashTimer = window.setTimeout(() => {
+          flash.classList.add('hidden');
+          flash.textContent = '';
+        }, 5000);
+      };
+
+      const findAsyncForm = (target) => (
+        target instanceof HTMLElement
+          ? target.closest('form.async-action-form, form.curator-action-form')
+          : null
+      );
+
+      const setButtonLoading = (form, submitter) => {
+        if (!submitter || !(submitter instanceof HTMLElement)) {
+          return;
+        }
+        if (submitter.dataset.loadingActive === '1') {
+          return;
+        }
+        submitter.dataset.loadingActive = '1';
+        submitter.dataset.originalText = submitter.textContent || '';
+        submitter.textContent = submitter.dataset.loadingText || 'Working...';
+        submitter.disabled = true;
+        submitter.classList.add('opacity-70', 'cursor-not-allowed');
+        form.dataset.loadingButton = submitter.name || submitter.id || '__active__';
+      };
+
+      const resetButtonLoading = (form) => {
+        if (!form || !(form instanceof HTMLElement)) {
+          return;
+        }
+        const active = form.querySelector('button[data-loading-active="1"]');
+        if (!active) {
+          return;
+        }
+        active.textContent = active.dataset.originalText || active.textContent || '';
+        active.disabled = false;
+        active.classList.remove('opacity-70', 'cursor-not-allowed');
+        delete active.dataset.loadingActive;
+      };
+
+      document.body.addEventListener('submit', (event) => {
+        const form = findAsyncForm(event.target);
+        if (!form) {
+          return;
+        }
+        const submitter = event.submitter || form.querySelector('button[type="submit"]');
+        if (submitter && submitter.dataset.loadingActive === '1') {
+          event.preventDefault();
+          return;
+        }
+        setButtonLoading(form, submitter);
+      });
+
+      document.body.addEventListener('htmx:afterRequest', (event) => {
+        const form = findAsyncForm(event.target);
+        if (!form) {
+          return;
+        }
+        resetButtonLoading(form);
+      });
+
+      document.body.addEventListener('htmx:responseError', (event) => {
+        const form = findAsyncForm(event.target);
+        if (!form) {
+          return;
+        }
+        resetButtonLoading(form);
+      });
+
+      document.body.addEventListener('admin:notify', (event) => {
+        const payload = detailValue(event);
+        if (!payload) {
+          return;
+        }
+        showFlash(payload.level || 'success', payload.message || '');
+      });
+
+      document.body.addEventListener('admin:reset-form', (event) => {
+        const payload = detailValue(event);
+        const formId = payload && payload.id ? String(payload.id) : '';
+        if (!formId) {
+          return;
+        }
+        const form = document.getElementById(formId);
+        if (form && form instanceof HTMLFormElement) {
+          form.reset();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

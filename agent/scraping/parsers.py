@@ -13,6 +13,7 @@ from agent.scraping.normalizer import (
     normalize_brand,
     normalize_category,
     normalize_name,
+    normalize_product_name,
     parse_price,
     parse_size,
 )
@@ -30,7 +31,9 @@ class RawProduct:
     url: str
 
 
-def parse_products(html: str, selectors: dict, base_url: str, currency: str = "JMD") -> list[RawProduct]:
+def parse_products(
+    html: str, selectors: dict, base_url: str, currency: str = "JMD"
+) -> list[RawProduct]:
     soup = BeautifulSoup(html, "html.parser")
     product_selector = selectors.get("product")
     elements = (
@@ -102,7 +105,8 @@ def raw_to_product(
     store_name: str,
     default_brand: str | None = None,
 ) -> Product:
-    normalized_name = normalize_name(raw.name)
+    display_name = normalize_product_name(raw.name)
+    normalized_name = normalize_name(display_name)
     brand = normalize_brand(raw.brand_hint)
     if not brand and default_brand:
         brand = default_brand
@@ -120,7 +124,7 @@ def raw_to_product(
     product = Product(
         store_id=store_id,
         store_name=store_name,
-        name=raw.name,
+        name=display_name,
         normalized_name=normalized_name,
         brand=brand,
         size=size,

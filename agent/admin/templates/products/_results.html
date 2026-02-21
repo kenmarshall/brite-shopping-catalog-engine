@@ -1,0 +1,49 @@
+<div class="mb-3 flex items-center justify-between">
+  <span class="text-sm text-gray-500">{{ "{:,}".format(total) }} total</span>
+</div>
+
+<div class="bg-white rounded-lg shadow overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="text-left px-4 py-3 font-medium text-gray-500">Name</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-500">Brand</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-500">Category</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-500">Pack</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-500">Size</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-500">Store</th>
+        <th class="text-right px-4 py-3 font-medium text-gray-500">Price</th>
+        <th class="text-center px-4 py-3 font-medium text-gray-500">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="product-table-body" class="divide-y">
+      {% include "products/_rows.html" %}
+    </tbody>
+  </table>
+</div>
+
+{% if total_pages > 1 %}
+<div class="flex justify-center items-center gap-2 mt-4">
+  {% if page > 1 %}
+  <a
+    href="/admin/products?q={{ query }}&store={{ active_store or '' }}&photo={{ active_photo or '' }}&flagged={{ active_flagged or '' }}&page={{ page - 1 }}&limit={{ limit }}"
+    hx-get="/admin/products?q={{ query }}&store={{ active_store or '' }}&photo={{ active_photo or '' }}&flagged={{ active_flagged or '' }}&page={{ page - 1 }}&limit={{ limit }}"
+    hx-target="#products-results"
+    hx-swap="innerHTML"
+    hx-push-url="true"
+    class="px-3 py-1 rounded border text-sm hover:bg-gray-100"
+  >Prev</a>
+  {% endif %}
+  <span class="text-sm text-gray-500">Page {{ page }} of {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a
+    href="/admin/products?q={{ query }}&store={{ active_store or '' }}&photo={{ active_photo or '' }}&flagged={{ active_flagged or '' }}&page={{ page + 1 }}&limit={{ limit }}"
+    hx-get="/admin/products?q={{ query }}&store={{ active_store or '' }}&photo={{ active_photo or '' }}&flagged={{ active_flagged or '' }}&page={{ page + 1 }}&limit={{ limit }}"
+    hx-target="#products-results"
+    hx-swap="innerHTML"
+    hx-push-url="true"
+    class="px-3 py-1 rounded border text-sm hover:bg-gray-100"
+  >Next</a>
+  {% endif %}
+</div>
+{% endif %}

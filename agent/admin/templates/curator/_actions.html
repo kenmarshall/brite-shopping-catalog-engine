@@ -1,0 +1,63 @@
+<section class="rounded-xl bg-white shadow">
+  <div class="border-b px-5 py-4">
+    <h3 class="text-lg font-semibold">Recent Curator Actions</h3>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+        <tr>
+          <th class="px-4 py-3">Time</th>
+          <th class="px-4 py-3">Action</th>
+          <th class="px-4 py-3">Cluster</th>
+          <th class="px-4 py-3">Summary</th>
+          <th class="px-4 py-3">Status</th>
+          <th class="px-4 py-3 text-right">Controls</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        {% for action in recent_actions %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-3 text-xs text-gray-600">
+            {{ action.created_at.strftime('%Y-%m-%d %H:%M:%S') if action.created_at else '—' }}
+          </td>
+          <td class="px-4 py-3">
+            <span class="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+              {{ action.action_type }}
+            </span>
+          </td>
+          <td class="px-4 py-3 font-mono text-xs text-gray-700">{{ action.normalized_name }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ action.summary }}</td>
+          <td class="px-4 py-3">
+            {% if action.status == 'undone' %}
+            <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">undone</span>
+            {% else %}
+            <span class="inline-flex rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">applied</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-right">
+            {% if action.status != 'undone' %}
+            <form method="post" action="/admin/curator/actions/{{ action._id }}/undo" class="curator-action-form async-action-form inline" hx-post="/admin/curator/actions/{{ action._id }}/undo" hx-swap="none">
+              <input type="hidden" name="limit" value="{{ limit }}">
+              <button
+                type="submit"
+                class="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                data-loading-text="Undoing..."
+              >
+                Undo
+              </button>
+            </form>
+            {% else %}
+            <span class="text-xs text-gray-400">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not recent_actions %}
+        <tr>
+          <td colspan="6" class="px-4 py-10 text-center text-gray-400">No curator actions yet</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>

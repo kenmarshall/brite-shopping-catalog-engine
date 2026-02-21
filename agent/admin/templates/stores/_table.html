@@ -1,0 +1,35 @@
+<table class="min-w-full text-sm">
+  <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+    <tr>
+      <th class="px-4 py-3">Store</th>
+      <th class="px-4 py-3">Source ID</th>
+      <th class="px-4 py-3">Strategy</th>
+      <th class="px-4 py-3">Base URL</th>
+      <th class="px-4 py-3 text-right">Products</th>
+    </tr>
+  </thead>
+  <tbody class="divide-y">
+    {% for source in sources %}
+    <tr class="hover:bg-gray-50">
+      <td class="px-4 py-3 font-medium text-gray-800">{{ source.display_name }}</td>
+      <td class="px-4 py-3 font-mono text-xs text-gray-600">{{ source.source_id }}</td>
+      <td class="px-4 py-3">
+        <span class="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{{ source.strategy }}</span>
+      </td>
+      <td class="px-4 py-3 text-gray-600">
+        {% if source.base_url %}
+        <a href="{{ source.base_url }}" target="_blank" rel="noopener" class="text-brand hover:underline">{{ source.base_url }}</a>
+        {% else %}
+        —
+        {% endif %}
+      </td>
+      <td class="px-4 py-3 text-right font-mono">{{ "{:,}".format(source.product_count) }}</td>
+    </tr>
+    {% endfor %}
+    {% if not sources %}
+    <tr>
+      <td colspan="5" class="px-4 py-10 text-center text-gray-400">No store sources configured</td>
+    </tr>
+    {% endif %}
+  </tbody>
+</table>

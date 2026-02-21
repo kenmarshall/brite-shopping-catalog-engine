@@ -1,0 +1,14 @@
+<div class="bg-white rounded-lg shadow p-5">
+  <p class="text-sm text-gray-500 uppercase tracking-wide">Total Products</p>
+  <p class="text-3xl font-bold text-brand mt-1">{{ "{:,}".format(total_products) }}</p>
+</div>
+<div class="bg-white rounded-lg shadow p-5">
+  <p class="text-sm text-gray-500 uppercase tracking-wide">Active Sources</p>
+  <p class="text-3xl font-bold text-brand mt-1">{{ store_stats | length }}</p>
+</div>
+<div class="bg-white rounded-lg shadow p-5">
+  <p class="text-sm text-gray-500 uppercase tracking-wide">Running Scrapes</p>
+  <p class="text-3xl font-bold {% if running_count > 0 %}text-green-600{% else %}text-gray-400{% endif %} mt-1">
+    {{ running_count }}
+  </p>
+</div>

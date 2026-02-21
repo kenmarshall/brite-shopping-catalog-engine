@@ -1,0 +1,228 @@
+<section class="rounded-xl bg-white shadow">
+  <div class="border-b px-5 py-4">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h3 class="text-lg font-semibold">Potential Merge Misses (Match Key Conflicts, Same Size)</h3>
+      <div class="inline-flex items-center gap-2">
+        <form method="post" action="/admin/curator/scan/conflicts" class="async-action-form inline" hx-post="/admin/curator/scan/conflicts" hx-swap="none">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button type="submit" class="rounded-md border border-gray-300 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100" data-loading-text="Scanning...">Scan</button>
+        </form>
+        <form method="post" action="/admin/curator/merge-all" class="curator-action-form async-action-form inline" hx-post="/admin/curator/merge-all" hx-target="#tbody-match-key-conflicts" hx-swap="innerHTML swap:150ms">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          {% for row in match_key_conflicts %}
+          <input type="hidden" name="normalized_names" value="{{ row.normalized_name }}">
+          {% endfor %}
+          <button
+            type="submit"
+            class="rounded-md border border-brand/30 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand hover:bg-brand/20"
+            data-loading-text="Merging..."
+          >
+            Merge All
+          </button>
+        </form>
+      </div>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+        <tr>
+          <th class="px-4 py-3">Product</th>
+          <th class="px-4 py-3">Pack</th>
+          <th class="px-4 py-3">Size</th>
+          <th class="px-4 py-3 text-right">Docs</th>
+          <th class="px-4 py-3">Stores</th>
+          <th class="px-4 py-3">Brands</th>
+          <th class="px-4 py-3 text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tbody-match-key-conflicts" class="divide-y">
+        {% for row in match_key_conflicts %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-3">
+            <div class="font-medium text-gray-800">{{ row.sample_name }}</div>
+            <div class="font-mono text-xs text-gray-500">{{ row.normalized_name }}</div>
+          </td>
+          <td class="px-4 py-3 text-xs text-gray-700">{% if row.packs_label != '—' %}<span class="inline-flex rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">{{ row.packs_label }}</span>{% else %}—{% endif %}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.measures_label }}</td>
+          <td class="px-4 py-3 text-right font-mono">{{ row.count }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.stores | join(', ') }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.brands | join(', ') if row.brands else '—' }}</td>
+          <td class="px-4 py-3 text-right">
+            <div class="inline-flex items-center gap-2">
+              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <form method="post" action="/admin/curator/merge" class="curator-action-form async-action-form inline" hx-post="/admin/curator/merge" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button
+                  type="submit"
+                  class="rounded-md border border-brand/30 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand hover:bg-brand/20"
+                  data-loading-text="Merging..."
+                >
+                  Merge
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not match_key_conflicts %}
+        <tr>
+          <td colspan="7" class="px-4 py-10 text-center text-gray-400">
+            No match-key conflicts found in current dataset
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mt-6 rounded-xl bg-white shadow">
+  <div class="border-b px-5 py-4">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h3 class="text-lg font-semibold">Brand Conflicts</h3>
+      <form method="post" action="/admin/curator/normalize-brand-all" class="curator-action-form async-action-form inline" hx-post="/admin/curator/normalize-brand-all" hx-target="#tbody-brand-conflicts" hx-swap="innerHTML swap:150ms">
+        <input type="hidden" name="limit" value="{{ limit }}">
+        {% for row in brand_conflicts %}
+        <input type="hidden" name="normalized_names" value="{{ row.normalized_name }}">
+        {% endfor %}
+        <button
+          type="submit"
+          class="rounded-md border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+          data-loading-text="Normalizing..."
+        >
+          Normalize All
+        </button>
+      </form>
+    </div>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+        <tr>
+          <th class="px-4 py-3">Product</th>
+          <th class="px-4 py-3">Pack</th>
+          <th class="px-4 py-3">Size</th>
+          <th class="px-4 py-3 text-right">Docs</th>
+          <th class="px-4 py-3">Brands</th>
+          <th class="px-4 py-3">Stores</th>
+          <th class="px-4 py-3 text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tbody-brand-conflicts" class="divide-y">
+        {% for row in brand_conflicts %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-3">
+            <div class="font-medium text-gray-800">{{ row.sample_name }}</div>
+            <div class="font-mono text-xs text-gray-500">{{ row.normalized_name }}</div>
+          </td>
+          <td class="px-4 py-3 text-xs text-gray-700">{% if row.packs_label != '—' %}<span class="inline-flex rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">{{ row.packs_label }}</span>{% else %}—{% endif %}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.measures_label }}</td>
+          <td class="px-4 py-3 text-right font-mono">{{ row.count }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.brands | join(', ') }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.stores | join(', ') }}</td>
+          <td class="px-4 py-3 text-right">
+            <div class="inline-flex items-center gap-2">
+              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <form method="post" action="/admin/curator/normalize-brand" class="curator-action-form async-action-form inline" hx-post="/admin/curator/normalize-brand" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button
+                  type="submit"
+                  class="rounded-md border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                  data-loading-text="Normalizing..."
+                >
+                  Normalize Brand
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not brand_conflicts %}
+        <tr>
+          <td colspan="7" class="px-4 py-10 text-center text-gray-400">No brand conflicts found</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mt-6 rounded-xl bg-white shadow">
+  <div class="border-b px-5 py-4">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h3 class="text-lg font-semibold">Category Conflicts</h3>
+      <form method="post" action="/admin/curator/normalize-category-all" class="curator-action-form async-action-form inline" hx-post="/admin/curator/normalize-category-all" hx-target="#tbody-category-conflicts" hx-swap="innerHTML swap:150ms">
+        <input type="hidden" name="limit" value="{{ limit }}">
+        {% for row in category_conflicts %}
+        <input type="hidden" name="normalized_names" value="{{ row.normalized_name }}">
+        {% endfor %}
+        <button
+          type="submit"
+          class="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+          data-loading-text="Normalizing..."
+        >
+          Normalize All
+        </button>
+      </form>
+    </div>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+        <tr>
+          <th class="px-4 py-3">Product</th>
+          <th class="px-4 py-3">Pack</th>
+          <th class="px-4 py-3">Size</th>
+          <th class="px-4 py-3 text-right">Docs</th>
+          <th class="px-4 py-3">Categories</th>
+          <th class="px-4 py-3">Stores</th>
+          <th class="px-4 py-3 text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tbody-category-conflicts" class="divide-y">
+        {% for row in category_conflicts %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-3">
+            <div class="font-medium text-gray-800">{{ row.sample_name }}</div>
+            <div class="font-mono text-xs text-gray-500">{{ row.normalized_name }}</div>
+          </td>
+          <td class="px-4 py-3 text-xs text-gray-700">{% if row.packs_label != '—' %}<span class="inline-flex rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">{{ row.packs_label }}</span>{% else %}—{% endif %}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.measures_label }}</td>
+          <td class="px-4 py-3 text-right font-mono">{{ row.count }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.categories | join(', ') }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.stores | join(', ') }}</td>
+          <td class="px-4 py-3 text-right">
+            <div class="inline-flex items-center gap-2">
+              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <form method="post" action="/admin/curator/normalize-category" class="curator-action-form async-action-form inline-flex items-center gap-1" hx-post="/admin/curator/normalize-category" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <select name="target_category" class="rounded-md border border-gray-300 px-1.5 py-1 text-xs focus:border-emerald-500 focus:outline-none">
+                  <option value="">Auto (dominant)</option>
+                  {% for cat in standard_categories %}
+                  <option value="{{ cat }}">{{ cat }}</option>
+                  {% endfor %}
+                </select>
+                <button
+                  type="submit"
+                  class="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                  data-loading-text="Normalizing..."
+                >
+                  Apply
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not category_conflicts %}
+        <tr>
+          <td colspan="7" class="px-4 py-10 text-center text-gray-400">No category conflicts found</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>

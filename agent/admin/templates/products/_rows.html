@@ -21,6 +21,10 @@
     <span class="text-gray-400">—</span>
     {% endif %}
   </td>
+  <td class="px-4 py-3 text-gray-600 text-xs">
+    {% if p._pack_label %}<span class="inline-flex rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">{{ p._pack_label }}</span>{% else %}—{% endif %}
+  </td>
+  <td class="px-4 py-3 text-gray-600 text-xs">{{ p._measure_label or "—" }}</td>
   <td class="px-4 py-3 text-gray-600 text-xs">{{ p.store_name or p.store_id }}</td>
   <td class="px-4 py-3 text-right font-mono">
     {% if p.estimated_price %}${{ "%.2f"|format(p.estimated_price) }}{% else %}—{% endif %}
@@ -28,24 +32,39 @@
   <td class="px-4 py-3 text-center">
     <a href="/admin/products/{{ p._id }}" class="text-xs text-brand hover:underline mr-2">Edit</a>
     {% if p._manual_merge_flag %}
-    <form method="post" action="/admin/products/{{ p._id }}/unflag-merge" class="inline">
-      <button type="submit" class="text-xs text-amber-700 hover:underline mr-2">Unflag</button>
+    <form
+      method="post"
+      action="/admin/products/{{ p._id }}/unflag-merge"
+      class="inline async-action-form"
+      hx-post="/admin/products/{{ p._id }}/unflag-merge"
+      hx-swap="none"
+    >
+      <button type="submit" class="text-xs text-amber-700 hover:underline mr-2" data-loading-text="Unflagging...">Unflag</button>
     </form>
     {% else %}
-    <form method="post" action="/admin/products/{{ p._id }}/flag-merge" class="inline">
-      <button type="submit" class="text-xs text-amber-700 hover:underline mr-2">Flag Merge</button>
+    <form
+      method="post"
+      action="/admin/products/{{ p._id }}/flag-merge"
+      class="inline async-action-form"
+      hx-post="/admin/products/{{ p._id }}/flag-merge"
+      hx-swap="none"
+    >
+      <button type="submit" class="text-xs text-amber-700 hover:underline mr-2" data-loading-text="Flagging...">Flag Merge</button>
     </form>
     {% endif %}
-    <button
-      class="text-xs text-red-500 hover:underline"
-      hx-delete="/admin/products/{{ p._id }}"
-      hx-target="#product-{{ p._id }}"
-      hx-swap="outerHTML"
+    <form
+      method="post"
+      action="/admin/products/{{ p._id }}/delete"
+      class="inline async-action-form"
+      hx-post="/admin/products/{{ p._id }}/delete"
+      hx-swap="none"
       hx-confirm="Delete this product?"
-    >Delete</button>
+    >
+      <button type="submit" class="text-xs text-red-500 hover:underline" data-loading-text="Deleting...">Delete</button>
+    </form>
   </td>
 </tr>
 {% endfor %}
 {% if not products %}
-<tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">No products found</td></tr>
+<tr><td colspan="8" class="px-4 py-8 text-center text-gray-400">No products found</td></tr>
 {% endif %}

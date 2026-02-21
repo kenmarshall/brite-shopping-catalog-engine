@@ -16,7 +16,14 @@
 
 <div class="mb-6 rounded-xl bg-white p-5 shadow">
   <h3 class="text-lg font-semibold">Start Scrape</h3>
-  <form method="post" action="/admin/scrapes/start" class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+  <form
+    id="scrape-start-form"
+    method="post"
+    action="/admin/scrapes/start"
+    class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end async-action-form"
+    hx-post="/admin/scrapes/start"
+    hx-swap="none"
+  >
     <div class="w-full sm:max-w-md">
       <label class="mb-1 block text-sm font-medium text-gray-700">Source</label>
       <select name="store_id" required class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
@@ -26,7 +33,7 @@
         {% endfor %}
       </select>
     </div>
-    <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
+    <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark" data-loading-text="Starting...">
       Start Scrape
     </button>
   </form>
@@ -36,7 +43,7 @@
   id="scrape-status"
   class="rounded-xl bg-white shadow"
   hx-get="/admin/scrapes/status"
-  hx-trigger="load, every 4s"
+  hx-trigger="load, every 4s, admin:scrapes-refresh from:body"
   hx-swap="innerHTML"
 >
   {% include "scrapes/_status.html" %}

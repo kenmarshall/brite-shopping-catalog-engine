@@ -1,0 +1,52 @@
+<div class="rounded-xl border border-gray-200 bg-white/90 p-4 shadow-sm md:col-span-3">
+  <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+    <div class="text-gray-600">
+      <span class="font-semibold text-gray-800">Snapshot:</span>
+      {% if snapshot_generated_at %}
+      {{ snapshot_generated_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+      {% else %}
+      Not scanned yet
+      {% endif %}
+      · cache cap {{ snapshot_row_cap }} rows/section
+    </div>
+    {% if snapshot_stale %}
+    <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
+      stale · {{ snapshot_stale_reason or 'Run Scan Now to refresh' }}
+    </span>
+    {% else %}
+    <span class="inline-flex rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-800">
+      current
+    </span>
+    {% endif %}
+  </div>
+</div>
+<div class="rounded-xl bg-white p-5 shadow">
+  <p class="text-xs uppercase tracking-wide text-gray-500">Match Key Conflicts</p>
+  <p class="mt-2 text-3xl font-bold text-brand">{{ match_key_conflict_count }}</p>
+  <p class="mt-2 text-sm text-gray-500">Top {{ row_limit }} rows sampled.</p>
+</div>
+<div class="rounded-xl bg-white p-5 shadow">
+  <p class="text-xs uppercase tracking-wide text-gray-500">Brand Conflicts</p>
+  <p class="mt-2 text-3xl font-bold text-brand">{{ brand_conflict_count }}</p>
+  <p class="mt-2 text-sm text-gray-500">Top {{ row_limit }} rows sampled.</p>
+</div>
+<div class="rounded-xl bg-white p-5 shadow">
+  <p class="text-xs uppercase tracking-wide text-gray-500">Category Conflicts</p>
+  <p class="mt-2 text-3xl font-bold text-brand">{{ category_conflict_count }}</p>
+  <p class="mt-2 text-sm text-gray-500">Top {{ row_limit }} rows sampled.</p>
+</div>
+<div class="rounded-xl bg-white p-5 shadow">
+  <p class="text-xs uppercase tracking-wide text-gray-500">Manual Merge Flags</p>
+  <p class="mt-2 text-3xl font-bold text-brand">{{ flagged_product_total }}</p>
+  <p class="mt-2 text-sm text-gray-500">Flagged directly from product search/detail.</p>
+</div>
+<div class="rounded-xl bg-white p-5 shadow">
+  <p class="text-xs uppercase tracking-wide text-gray-500">Name/Size Cleanup</p>
+  <p class="mt-2 text-3xl font-bold text-brand">{{ name_cleanup_total }}</p>
+  <p class="mt-2 text-sm text-gray-500">Top {{ row_limit }} candidates sampled.</p>
+</div>
+<div class="rounded-xl bg-white p-5 shadow">
+  <p class="text-xs uppercase tracking-wide text-gray-500">Missing Photos</p>
+  <p class="mt-2 text-3xl font-bold text-brand">{{ missing_photo_total }}</p>
+  <p class="mt-2 text-sm text-gray-500">Products without usable image URLs.</p>
+</div>

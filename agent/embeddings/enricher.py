@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 import httpx
 
+from agent.config.categories import STANDARD_CATEGORIES, match_standard_category
 from agent.config.settings import get_settings
 from agent.db.models import Product
 from agent.embeddings.featurizer import build_embedding_text
@@ -123,7 +124,69 @@ def _name_tokens(product: Product) -> list[str]:
     return _normalize_tags(tokens)
 
 
+_CATEGORY_LIST_TEXT = ", ".join(STANDARD_CATEGORIES)
+
+
+async def _assign_standard_category(product: Product) -> str | None:
+    """Pick the best standard category for *product* using AI.
+
+    Returns the matched category string, or ``None`` if assignment fails.
+    Fast path: if the existing category already matches a standard one,
+    returns it immediately without calling Ollama.
+    """
+    # Fast path — current category is already standard
+    matched = match_standard_category(product.category)
+    if matched:
+        return matched
+
+    prompt = (
+        "You are a grocery classification assistant. "
+        "Given a product, pick the single best category from the list below. "
+        "Reply with ONLY the category name, nothing else.\n\n"
+        f"Categories: {_CATEGORY_LIST_TEXT}\n\n"
+        f"Product name: {product.name}\n"
+        f"Current category: {product.category or 'none'}\n"
+        f"Brand: {product.brand or 'unknown'}\n"
+    )
+    settings = get_settings().ollama
+    model = settings.tag_model
+    if not model:
+        return None
+    try:
+        async with httpx.AsyncClient(
+            base_url=str(settings.base_url),
+            timeout=30.0,
+        ) as client:
+            response = await client.post(
+                "/api/generate",
+                json={"model": model, "prompt": prompt, "stream": False},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        LOGGER.debug("Category assignment failed for %s: %s", product.name, exc)
+        return None
+
+    text = ""
+    if isinstance(data, dict):
+        text = (
+            data.get("response")
+            or data.get("text")
+            or data.get("message", {}).get("content", "")
+        )
+    if not text:
+        return None
+
+    # Try to match the AI response against the standard list
+    return match_standard_category(text.strip())
+
+
 async def enrich_product(product: Product) -> Product:
+    # Assign a standard category (fast path if already standard)
+    std_cat = await _assign_standard_category(product)
+    if std_cat:
+        product.category = std_cat
+
     prompt = (
         "You are a grocery taxonomy assistant. "
         "Given a product name, brand, and category, return exactly 5 concise tags "

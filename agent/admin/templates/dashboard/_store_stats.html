@@ -1,0 +1,24 @@
+<div class="px-5 py-4 border-b">
+  <h3 class="text-lg font-semibold">Products by Store</h3>
+</div>
+<table class="w-full text-sm">
+  <thead class="bg-gray-50">
+    <tr>
+      <th class="text-left px-5 py-3 font-medium text-gray-500">Store</th>
+      <th class="text-right px-5 py-3 font-medium text-gray-500">Products</th>
+    </tr>
+  </thead>
+  <tbody class="divide-y">
+    {% for stat in store_stats %}
+    <tr class="hover:bg-gray-50">
+      <td class="px-5 py-3">{{ stat.store_name or stat._id }}</td>
+      <td class="px-5 py-3 text-right font-mono">{{ "{:,}".format(stat.count) }}</td>
+    </tr>
+    {% endfor %}
+    {% if not store_stats %}
+    <tr>
+      <td colspan="2" class="px-5 py-8 text-center text-gray-400">No store stats yet</td>
+    </tr>
+    {% endif %}
+  </tbody>
+</table>

@@ -12,7 +12,14 @@
 </div>
 {% endif %}
 
-<form method="post" action="/admin/products/new" class="max-w-3xl space-y-4 rounded-xl bg-white p-5 shadow">
+<form
+  id="new-product-form"
+  method="post"
+  action="/admin/products/new"
+  class="max-w-3xl space-y-4 rounded-xl bg-white p-5 shadow async-action-form"
+  hx-post="/admin/products/new"
+  hx-swap="none"
+>
   <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
     <div>
       <label class="mb-1 block text-sm font-medium text-gray-700">Store ID</label>
@@ -34,7 +41,7 @@
     <input name="name" required placeholder="e.g. Grace Coconut Milk 400ml" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
   </div>
 
-  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
     <div>
       <label class="mb-1 block text-sm font-medium text-gray-700">Price (optional)</label>
       <input name="price" type="number" step="0.01" min="0" placeholder="0.00" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
@@ -44,8 +51,12 @@
       <input name="currency" value="JMD" maxlength="3" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm uppercase focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
     </div>
     <div>
-      <label class="mb-1 block text-sm font-medium text-gray-700">Size Hint</label>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Size</label>
       <input name="size_hint" placeholder="e.g. 400ml" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+    </div>
+    <div>
+      <label class="mb-1 block text-sm font-medium text-gray-700">Pack Qty</label>
+      <input name="pack_qty" type="number" min="1" placeholder="1" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
     </div>
   </div>
 
@@ -56,7 +67,12 @@
     </div>
     <div>
       <label class="mb-1 block text-sm font-medium text-gray-700">Category</label>
-      <input name="category" placeholder="e.g. Canned Goods" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+      <select name="category" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
+        <option value="">— Select category —</option>
+        {% for cat in standard_categories %}
+        <option value="{{ cat }}">{{ cat }}</option>
+        {% endfor %}
+      </select>
     </div>
   </div>
 
@@ -71,7 +87,7 @@
   </div>
 
   <div class="pt-2">
-    <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
+    <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark" data-loading-text="Saving...">
       Save Product
     </button>
   </div>

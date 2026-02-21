@@ -45,13 +45,25 @@
         <td class="px-4 py-3 text-xs text-gray-600">{{ job.finished_at.strftime('%Y-%m-%d %H:%M:%S') if job.finished_at else '—' }}</td>
         <td class="px-4 py-3 text-right">
           {% if job.status == "running" %}
-          <form method="post" action="/admin/scrapes/{{ job._id }}/stop" class="inline">
-            <button type="submit" class="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100">
+          <form
+            method="post"
+            action="/admin/scrapes/{{ job._id }}/stop"
+            class="inline async-action-form"
+            hx-post="/admin/scrapes/{{ job._id }}/stop"
+            hx-swap="none"
+          >
+            <button type="submit" class="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100" data-loading-text="Stopping...">
               Stop
             </button>
           </form>
-          <form method="post" action="/admin/scrapes/{{ job._id }}/cancel" class="inline">
-            <button type="submit" class="ml-2 rounded-md border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100">
+          <form
+            method="post"
+            action="/admin/scrapes/{{ job._id }}/cancel"
+            class="inline async-action-form"
+            hx-post="/admin/scrapes/{{ job._id }}/cancel"
+            hx-swap="none"
+          >
+            <button type="submit" class="ml-2 rounded-md border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100" data-loading-text="Canceling...">
               Cancel
             </button>
           </form>
@@ -59,8 +71,14 @@
           <span class="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
             Stop Requested
           </span>
-          <form method="post" action="/admin/scrapes/{{ job._id }}/cancel" class="inline">
-            <button type="submit" class="ml-2 rounded-md border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100">
+          <form
+            method="post"
+            action="/admin/scrapes/{{ job._id }}/cancel"
+            class="inline async-action-form"
+            hx-post="/admin/scrapes/{{ job._id }}/cancel"
+            hx-swap="none"
+          >
+            <button type="submit" class="ml-2 rounded-md border border-orange-200 bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100" data-loading-text="Canceling...">
               Cancel
             </button>
           </form>

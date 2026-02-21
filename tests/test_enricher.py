@@ -139,7 +139,11 @@ async def test_low_quality_tags_are_filtered(monkeypatch):
             "Grace Brand",
         ]
 
+    async def no_op_category(_product):
+        return None
+
     monkeypatch.setattr(enricher, "_generate_tags", fake_generate_tags)
+    monkeypatch.setattr(enricher, "_assign_standard_category", no_op_category)
 
     enriched = await enricher.enrich_product(product)
 

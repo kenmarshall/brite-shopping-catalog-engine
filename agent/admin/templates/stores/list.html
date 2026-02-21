@@ -17,7 +17,14 @@
 <div class="mb-6 rounded-xl bg-white p-5 shadow">
   <h3 class="text-lg font-semibold">Add Store Source</h3>
   <p class="mt-1 text-sm text-gray-500">Creates a new source entry in <code>agent/config/sources.yml</code>.</p>
-  <form method="post" action="/admin/stores" class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+  <form
+    id="stores-create-form"
+    method="post"
+    action="/admin/stores"
+    class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3 async-action-form"
+    hx-post="/admin/stores"
+    hx-swap="none"
+  >
     <div>
       <label class="mb-1 block text-sm font-medium text-gray-700">Source ID</label>
       <input name="source_id" required placeholder="e.g. fontana" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
@@ -48,48 +55,20 @@
       <input name="currency" value="JMD" maxlength="3" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm uppercase focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30">
     </div>
     <div class="lg:col-span-3">
-      <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
+      <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark" data-loading-text="Adding...">
         Add Store Source
       </button>
     </div>
   </form>
 </div>
 
-<div class="overflow-x-auto rounded-xl bg-white shadow">
-  <table class="min-w-full text-sm">
-    <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
-      <tr>
-        <th class="px-4 py-3">Store</th>
-        <th class="px-4 py-3">Source ID</th>
-        <th class="px-4 py-3">Strategy</th>
-        <th class="px-4 py-3">Base URL</th>
-        <th class="px-4 py-3 text-right">Products</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y">
-      {% for source in sources %}
-      <tr class="hover:bg-gray-50">
-        <td class="px-4 py-3 font-medium text-gray-800">{{ source.display_name }}</td>
-        <td class="px-4 py-3 font-mono text-xs text-gray-600">{{ source.source_id }}</td>
-        <td class="px-4 py-3">
-          <span class="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{{ source.strategy }}</span>
-        </td>
-        <td class="px-4 py-3 text-gray-600">
-          {% if source.base_url %}
-          <a href="{{ source.base_url }}" target="_blank" rel="noopener" class="text-brand hover:underline">{{ source.base_url }}</a>
-          {% else %}
-          —
-          {% endif %}
-        </td>
-        <td class="px-4 py-3 text-right font-mono">{{ "{:,}".format(source.product_count) }}</td>
-      </tr>
-      {% endfor %}
-      {% if not sources %}
-      <tr>
-        <td colspan="5" class="px-4 py-10 text-center text-gray-400">No store sources configured</td>
-      </tr>
-      {% endif %}
-    </tbody>
-  </table>
+<div
+  id="stores-table"
+  class="overflow-x-auto rounded-xl bg-white shadow"
+  hx-get="/admin/stores/sections/table"
+  hx-trigger="load, admin:stores-refresh from:body"
+  hx-swap="innerHTML"
+>
+  <div class="p-6 text-sm text-gray-500 animate-pulse">Loading stores...</div>
 </div>
 {% endblock %}

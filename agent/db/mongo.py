@@ -33,6 +33,7 @@ class MongoService:
         self.stores = self.db[settings.collection_stores]
         self.jobs = self.db[settings.collection_jobs]
         self.curator_actions = self.db["curator_actions"]
+        self.curator_snapshots = self.db["curator_snapshots"]
         self._ensure_indexes()
 
     def _ensure_indexes(self) -> None:
@@ -48,6 +49,8 @@ class MongoService:
             self.curator_actions.create_index([("status", ASCENDING)])
             self.curator_actions.create_index([("created_at", ASCENDING)])
             self.curator_actions.create_index([("normalized_name", ASCENDING)])
+            self.curator_snapshots.create_index([("snapshot_key", ASCENDING)], unique=True)
+            self.curator_snapshots.create_index([("updated_at", ASCENDING)])
         except Exception as exc:  # pragma: no cover
             LOGGER.debug("Index creation skipped: %s", exc)
 

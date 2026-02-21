@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-6">
+  <a href="/admin/curator" class="text-sm text-brand hover:underline">&larr; Back to curator</a>
+  <h2 class="mt-1 text-2xl font-bold">Cluster Review</h2>
+  <p class="mt-1 text-sm text-gray-500">
+    {{ product_count }} product{{ 's' if product_count != 1 else '' }} sharing normalized name
+    <span class="font-mono">{{ normalized_name }}</span>
+  </p>
+</div>
+
+{% if message %}
+<div class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+  {{ message }}
+</div>
+{% endif %}
+
+{% if error %}
+<div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+  {{ error }}
+</div>
+{% endif %}
+
+<div id="review-content">
+  {% include "curator/_review_content.html" %}
+</div>
+{% endblock %}

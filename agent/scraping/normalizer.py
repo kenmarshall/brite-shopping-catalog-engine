@@ -5,7 +5,7 @@ import re
 
 from agent.db.models import SizeInfo
 
-MEASURE_UNITS = r"ml|l|litre|liter|g|kg|oz|fl\s*oz|lb|lbs"
+MEASURE_UNITS = r"ml|l|litre|liter|g|kg|oz|fl\s*oz|lb|lbs|gal|gallon|gallons|pt|pint|pints|qt|quart|quarts|cl|mg"
 COUNT_UNITS = r"packs?|pk|ct|count"
 
 MULTIPACK_PATTERN = re.compile(
@@ -111,15 +111,22 @@ def parse_price(price_text: str) -> float | None:
 
 def _normalize_unit(unit: str) -> str:
     normalized = re.sub(r"\s+", "", unit.lower())
-    return (
-        normalized.replace("packs", "pack")
-        .replace("pk", "pack")
-        .replace("ct", "count")
-        .replace("litre", "l")
-        .replace("liter", "l")
-        .replace("floz", "oz")
-        .replace("lbs", "lb")
-    )
+    mapping = {
+        "packs": "pack",
+        "pk": "pack",
+        "ct": "count",
+        "litre": "l",
+        "liter": "l",
+        "floz": "oz",
+        "lbs": "lb",
+        "gallon": "gal",
+        "gallons": "gal",
+        "pint": "pt",
+        "pints": "pt",
+        "quart": "qt",
+        "quarts": "qt",
+    }
+    return mapping.get(normalized, normalized)
 
 
 def parse_size(text: str) -> SizeInfo:

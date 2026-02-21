@@ -3,7 +3,6 @@
 <div class="flex justify-between items-center mb-6">
   <h2 class="text-2xl font-bold">Products</h2>
   <div class="flex items-center gap-3">
-    <span class="text-sm text-gray-500">{{ "{:,}".format(total) }} total</span>
     <a href="/admin/products/new" class="inline-flex items-center rounded-lg bg-brand px-3 py-2 text-xs font-semibold text-white hover:bg-brand-dark">
       Add Product
     </a>
@@ -18,27 +17,26 @@
 {% endif %}
 
 <!-- Search & Filters -->
-<div class="flex gap-3 mb-4">
+<form
+  id="products-filter-form"
+  class="flex gap-3 mb-4"
+  hx-get="/admin/products"
+  hx-target="#products-results"
+  hx-swap="innerHTML"
+  hx-include="#products-filter-form"
+  hx-push-url="true"
+  hx-trigger="submit, change from:select, keyup changed delay:300ms from:input[name='q']"
+>
   <input
     type="text"
     name="q"
     value="{{ query }}"
     placeholder="Search products..."
     class="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-    hx-get="/admin/products"
-    hx-trigger="keyup changed delay:300ms"
-    hx-target="#product-table-body"
-    hx-include="[name='store'],[name='photo'],[name='flagged']"
-    hx-push-url="true"
   >
   <select
     name="store"
     class="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-    hx-get="/admin/products"
-    hx-trigger="change"
-    hx-target="#product-table-body"
-    hx-include="[name='q'],[name='photo'],[name='flagged']"
-    hx-push-url="true"
   >
     <option value="">All Stores</option>
     {% for s in stores %}
@@ -48,11 +46,6 @@
   <select
     name="photo"
     class="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-    hx-get="/admin/products"
-    hx-trigger="change"
-    hx-target="#product-table-body"
-    hx-include="[name='q'],[name='store'],[name='flagged']"
-    hx-push-url="true"
   >
     <option value="" {% if not active_photo %}selected{% endif %}>All Photos</option>
     <option value="missing" {% if active_photo == "missing" %}selected{% endif %}>Missing Photos</option>
@@ -61,53 +54,25 @@
   <select
     name="flagged"
     class="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand"
-    hx-get="/admin/products"
-    hx-trigger="change"
-    hx-target="#product-table-body"
-    hx-include="[name='q'],[name='store'],[name='photo']"
-    hx-push-url="true"
   >
     <option value="" {% if not active_flagged %}selected{% endif %}>All Flags</option>
     <option value="1" {% if active_flagged == "1" %}selected{% endif %}>Merge Flagged</option>
   </select>
-</div>
+  <input type="hidden" name="limit" value="{{ limit }}">
+</form>
 
 <p class="mb-4 text-xs text-gray-500">
   Flow: search products, click <span class="font-semibold">Flag Merge</span> on suspected duplicates, then open
   <a href="/admin/curator" class="text-brand hover:underline">AI Curator</a> to merge or normalize clusters.
 </p>
 
-<!-- Product Table -->
-<div class="bg-white rounded-lg shadow overflow-hidden">
-  <table class="w-full text-sm">
-    <thead class="bg-gray-50">
-      <tr>
-        <th class="text-left px-4 py-3 font-medium text-gray-500">Name</th>
-        <th class="text-left px-4 py-3 font-medium text-gray-500">Brand</th>
-        <th class="text-left px-4 py-3 font-medium text-gray-500">Category</th>
-        <th class="text-left px-4 py-3 font-medium text-gray-500">Store</th>
-        <th class="text-right px-4 py-3 font-medium text-gray-500">Price</th>
-        <th class="text-center px-4 py-3 font-medium text-gray-500">Actions</th>
-      </tr>
-    </thead>
-    <tbody id="product-table-body" class="divide-y">
-      {% include "products/_rows.html" %}
-    </tbody>
-  </table>
+<div
+  id="products-results"
+  hx-get="/admin/products"
+  hx-trigger="load, admin:products-refresh from:body"
+  hx-swap="innerHTML"
+  hx-include="#products-filter-form"
+>
+  <div class="rounded-xl bg-white p-6 shadow text-sm text-gray-500 animate-pulse">Loading products...</div>
 </div>
-
-<!-- Pagination -->
-{% if total_pages > 1 %}
-<div class="flex justify-center items-center gap-2 mt-4">
-  {% if page > 1 %}
-  <a href="/admin/products?q={{ query }}&store={{ active_store }}&photo={{ active_photo }}&flagged={{ active_flagged }}&page={{ page - 1 }}"
-     class="px-3 py-1 rounded border text-sm hover:bg-gray-100">Prev</a>
-  {% endif %}
-  <span class="text-sm text-gray-500">Page {{ page }} of {{ total_pages }}</span>
-  {% if page < total_pages %}
-  <a href="/admin/products?q={{ query }}&store={{ active_store }}&photo={{ active_photo }}&flagged={{ active_flagged }}&page={{ page + 1 }}"
-     class="px-3 py-1 rounded border text-sm hover:bg-gray-100">Next</a>
-  {% endif %}
-</div>
-{% endif %}
 {% endblock %}
