@@ -59,6 +59,32 @@
   {% endif %}
 </div>
 
+{% if merge_preview %}
+<!-- Merge preview -->
+<div class="mb-6 rounded-xl border-2 border-dashed border-brand/30 bg-brand/5 p-4">
+  <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">Merge Preview — Result</h3>
+  <div class="flex items-start gap-4">
+    {% if merge_preview.image_url %}
+    <img src="{{ merge_preview.image_url }}" alt="" class="h-14 w-14 rounded object-cover">
+    {% else %}
+    <div class="flex h-14 w-14 items-center justify-center rounded bg-gray-100 text-[10px] text-gray-400">No img</div>
+    {% endif %}
+    <div class="flex-1">
+      <div class="font-medium text-gray-800">{{ merge_preview.name }}</div>
+      <div class="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-600">
+        <span>Brand: <strong>{{ merge_preview.brand or '—' }}</strong></span>
+        <span>Category: <strong>{{ merge_preview.category or '—' }}</strong></span>
+        {% if merge_preview.estimated_price is not none %}
+        <span>Est. Price: <strong class="font-mono">${{ '%.2f'|format(merge_preview.estimated_price) }}</strong></span>
+        {% endif %}
+        <span>Locations: <strong>{{ merge_preview.location_count }}</strong></span>
+        <span>Stores: <strong>{{ merge_preview.store_count }}</strong></span>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Product comparison table -->
 <div class="rounded-xl bg-white shadow overflow-x-auto">
   <table class="min-w-full text-sm">

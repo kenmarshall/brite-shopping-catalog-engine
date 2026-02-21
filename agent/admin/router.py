@@ -182,7 +182,13 @@ def _format_pack(size: SizeInfo) -> str:
 
 
 def _format_measure(size: SizeInfo) -> str:
-    """Format just the measure portion (value + unit), e.g. '330ml'."""
+    """Format just the measure portion (value + unit), e.g. '330ml'.
+
+    When unit is 'count', the info is purely a pack quantity (already shown
+    by _format_pack), so we return '' to avoid redundant display like '3count'.
+    """
+    if size.unit in ("count", "pack"):
+        return ""
     if size.value is not None and size.unit:
         return f"{_float_text(size.value)}{size.unit}"
     if size.value is not None:
@@ -194,14 +200,18 @@ def _size_signature(size: SizeInfo) -> tuple[float | None, str | None, int | Non
     return (size.value, size.unit, size.pack_count)
 
 
-def _known_size_signatures_from_docs(
+def _size_signatures_from_docs(
     docs: list[dict[str, Any]],
 ) -> set[tuple[float | None, str | None, int | None]]:
+    """Collect distinct size signatures from docs.
+
+    Includes (None, None, None) so that products missing size info are treated
+    as a distinct variant — prevents merging a 3-pack with a single item that
+    happens to have no size data.
+    """
     signatures: set[tuple[float | None, str | None, int | None]] = set()
     for doc in docs:
-        signature = _size_signature(_size_info_from_doc(doc))
-        if signature != (None, None, None):
-            signatures.add(signature)
+        signatures.add(_size_signature(_size_info_from_doc(doc)))
     return signatures
 
 
@@ -423,7 +433,7 @@ def _collect_curator_conflicts(
         categories = _non_empty(row.get("categories") or [])
         match_keys = _non_empty(row.get("match_keys") or [])
         size_docs = [{"size": size_doc} for size_doc in (row.get("sizes") or [])]
-        size_signatures = _known_size_signatures_from_docs(size_docs)
+        size_signatures = _size_signatures_from_docs(size_docs)
         has_mixed_sizes = len(size_signatures) > 1
 
         payload = {
@@ -900,7 +910,7 @@ def _execute_merge_cluster(mongo: MongoService, key: str) -> dict[str, Any]:
     docs = _cluster_products(mongo, key)
     if len(docs) < 2:
         raise ValueError("Cluster has fewer than 2 products, nothing to merge")
-    size_signatures = _known_size_signatures_from_docs(docs)
+    size_signatures = _size_signatures_from_docs(docs)
     if len(size_signatures) > 1:
         raise ValueError("Cluster has multiple size variants, merge by size only")
 
@@ -2244,9 +2254,45 @@ async def curator_review(
     # Detect conflict types present
     has_brand_conflict = len(brands) > 1
     has_category_conflict = len(categories) > 1
-    size_sigs = _known_size_signatures_from_docs(docs)
+    size_sigs = _size_signatures_from_docs(docs)
     has_mixed_sizes = len(size_sigs) > 1
     can_merge = len(docs) > 1 and not has_mixed_sizes
+
+    # Compute merge preview (what the result would look like)
+    merge_preview: dict[str, Any] | None = None
+    if can_merge:
+        preview_docs = sorted(
+            docs,
+            key=lambda d: (
+                len(d.get("location_prices") or []),
+                1 if d.get("estimated_price") is not None else 0,
+            ),
+            reverse=True,
+        )
+        all_prices: list[dict[str, Any]] = []
+        for d in preview_docs:
+            all_prices = _merge_location_prices(
+                all_prices, d.get("location_prices") or []
+            )
+        merge_preview = {
+            "name": preview_docs[0].get("name", key),
+            "brand": normalize_brand(_dominant_text_value(preview_docs, "brand")),
+            "category": normalize_category(
+                _dominant_text_value(preview_docs, "category")
+            ),
+            "estimated_price": _average_price(all_prices),
+            "location_count": len(all_prices),
+            "store_count": len(stores),
+            "image_url": next(
+                (
+                    d.get("image_url")
+                    for d in preview_docs
+                    if d.get("image_url")
+                    and not str(d["image_url"]).startswith("data:image/svg")
+                ),
+                None,
+            ),
+        }
 
     return templates.TemplateResponse(
         "curator/review.html",
@@ -2262,6 +2308,7 @@ async def curator_review(
             "has_category_conflict": has_category_conflict,
             "has_mixed_sizes": has_mixed_sizes,
             "can_merge": can_merge,
+            "merge_preview": merge_preview,
             "standard_categories": STANDARD_CATEGORIES,
             "message": message,
             "error": error,
