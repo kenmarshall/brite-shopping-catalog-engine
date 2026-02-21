@@ -644,6 +644,98 @@ def _collect_missing_photo_candidates(
     return docs, total_missing
 
 
+PRICE_ANOMALY_RATIO = 2.5  # flag when max/min price ratio exceeds this
+
+
+def _collect_price_anomalies(
+    mongo: MongoService,
+    *,
+    top_k: int = 25,
+    ratio_threshold: float = PRICE_ANOMALY_RATIO,
+) -> list[dict[str, Any]]:
+    """Find products sharing the same normalized_name where cross-store prices
+    differ by more than *ratio_threshold*.  A 4x price gap for the same size
+    usually means one product has the wrong size attached to its price
+    (e.g. the 517g price was stored under a 184g record)."""
+
+    pipeline: list[dict[str, Any]] = [
+        {"$match": {"normalized_name": {"$nin": [None, ""]}, "estimated_price": {"$gt": 0}}},
+        {
+            "$group": {
+                "_id": "$normalized_name",
+                "count": {"$sum": 1},
+                "min_price": {"$min": "$estimated_price"},
+                "max_price": {"$max": "$estimated_price"},
+                "stores": {"$addToSet": {"$ifNull": ["$store_id", ""]}},
+                "sample_names": {"$addToSet": {"$ifNull": ["$name", ""]}},
+                "sizes": {"$addToSet": {"$ifNull": ["$size", {}]}},
+                "prices": {
+                    "$push": {
+                        "store": {"$ifNull": ["$store_name", "$store_id"]},
+                        "price": "$estimated_price",
+                        "size": "$size",
+                    }
+                },
+            }
+        },
+        {"$match": {"count": {"$gt": 1}}},
+        {
+            "$addFields": {
+                "price_ratio": {
+                    "$cond": [
+                        {"$gt": ["$min_price", 0]},
+                        {"$divide": ["$max_price", "$min_price"]},
+                        0,
+                    ]
+                }
+            }
+        },
+        {"$match": {"price_ratio": {"$gte": ratio_threshold}}},
+        {"$sort": {"price_ratio": -1}},
+        {"$limit": top_k},
+    ]
+
+    rows = list(mongo.products.aggregate(pipeline))
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        normalized_name = str(row.get("_id", "")).strip()
+        if not normalized_name:
+            continue
+        sample_names = _non_empty(row.get("sample_names") or [])
+        stores = _non_empty(row.get("stores") or [])
+        size_docs = [{"size": sd} for sd in (row.get("sizes") or [])]
+        packs, measures = _split_size_labels_from_docs(size_docs)
+
+        # Build per-store price breakdown for display
+        price_details = []
+        for entry in row.get("prices") or []:
+            si = _size_info_from_doc({"size": entry.get("size") or {}})
+            price_details.append(
+                {
+                    "store": entry.get("store") or "—",
+                    "price": entry.get("price"),
+                    "size_label": _format_size(si),
+                }
+            )
+        price_details.sort(key=lambda d: d.get("price") or 0)
+
+        results.append(
+            {
+                "normalized_name": normalized_name,
+                "sample_name": sample_names[0] if sample_names else normalized_name,
+                "count": int(row.get("count", 0)),
+                "stores": stores,
+                "packs_label": ", ".join(packs) if packs else "—",
+                "measures_label": ", ".join(measures) if measures else "—",
+                "min_price": round(row.get("min_price", 0), 2),
+                "max_price": round(row.get("max_price", 0), 2),
+                "price_ratio": round(row.get("price_ratio", 0), 1),
+                "price_details": price_details,
+            }
+        )
+    return results
+
+
 def _curator_row_limit(limit: int) -> int:
     return max(5, min(int(limit), CURATOR_SNAPSHOT_ROW_CAP))
 
@@ -672,6 +764,10 @@ def _build_curator_snapshot(
         mongo,
         top_k=capped_limit,
     )
+    price_anomalies = _collect_price_anomalies(
+        mongo,
+        top_k=capped_limit,
+    )
 
     now = datetime.utcnow()
     return {
@@ -690,6 +786,7 @@ def _build_curator_snapshot(
         "name_cleanup_total": int(name_cleanup_total),
         "missing_photo_candidates": missing_photo_candidates,
         "missing_photo_total": int(missing_photo_total),
+        "price_anomalies": price_anomalies,
     }
 
 
@@ -739,6 +836,8 @@ def _refresh_curator_section(
         candidates, total = _collect_missing_photo_candidates(mongo, top_k=capped_limit)
         updates["missing_photo_candidates"] = candidates
         updates["missing_photo_total"] = int(total)
+    elif section == "price-anomalies":
+        updates["price_anomalies"] = _collect_price_anomalies(mongo, top_k=capped_limit)
     else:
         return {}
 
@@ -2368,6 +2467,7 @@ _SECTION_EVENTS: dict[str, list[str]] = {
     "manual-flags": ["admin:curator-refresh-flags", "admin:curator-refresh-summary"],
     "name-size": ["admin:curator-refresh-name-size", "admin:curator-refresh-summary"],
     "missing-photos": ["admin:curator-refresh-photos", "admin:curator-refresh-summary"],
+    "price-anomalies": ["admin:curator-refresh-price-anomalies", "admin:curator-refresh-summary"],
 }
 
 _SECTION_LABELS: dict[str, str] = {
@@ -2375,6 +2475,7 @@ _SECTION_LABELS: dict[str, str] = {
     "manual-flags": "Manual Merge Flags",
     "name-size": "Name & Size Normalization",
     "missing-photos": "Missing Photos",
+    "price-anomalies": "Price Anomalies",
 }
 
 
@@ -2518,6 +2619,25 @@ async def curator_missing_photos_partial(
             "request": request,
             "missing_photo_candidates": missing_photo_candidates,
             "missing_photo_total": missing_photo_total,
+            "limit": row_limit,
+        },
+    )
+
+
+@router.get("/curator/sections/price-anomalies", response_class=HTMLResponse)
+async def curator_price_anomalies_partial(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    snapshot = _load_curator_snapshot(mongo, ensure=True)
+    row_limit = _curator_row_limit(limit)
+    price_anomalies = _snapshot_rows(snapshot, "price_anomalies", row_limit)
+    return templates.TemplateResponse(
+        "curator/_price_anomalies.html",
+        {
+            "request": request,
+            "price_anomalies": price_anomalies,
             "limit": row_limit,
         },
     )

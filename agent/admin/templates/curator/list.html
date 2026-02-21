@@ -95,6 +95,17 @@
   </div>
 
   <div
+    id="curator-price-anomalies"
+    hx-get="/admin/curator/sections/price-anomalies"
+    hx-vals='js:{limit: document.getElementById("curator-limit").value}'
+    hx-trigger="load, admin:curator-refresh from:body, admin:curator-refresh-price-anomalies from:body"
+    hx-swap="innerHTML"
+    hx-sync="this:replace"
+  >
+    <div class="rounded-xl bg-white p-6 shadow text-sm text-gray-500 animate-pulse">Loading price anomalies...</div>
+  </div>
+
+  <div
     id="curator-missing-photos"
     hx-get="/admin/curator/sections/missing-photos"
     hx-vals='js:{limit: document.getElementById("curator-limit").value}'
