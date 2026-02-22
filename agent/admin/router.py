@@ -727,12 +727,16 @@ def _collect_price_anomalies(
         sig_to_prices: dict[tuple, list[float]] = {}
         has_missing_size = False
         for entry in entries:
-            si = _size_info_from_doc({"size": entry.get("size") or {}})
+            raw_size = entry.get("size")
+            # A size field that is None, missing, or an empty dict means
+            # the product has no size info at all.
+            size_present = isinstance(raw_size, dict) and bool(raw_size.get("value") or raw_size.get("unit"))
+            si = _size_info_from_doc({"size": raw_size or {}})
             sig = _size_signature(si)
             price = entry.get("price")
             if price is None:
                 continue
-            if sig == (None, None, None):
+            if not size_present:
                 has_missing_size = True
             sig_to_prices.setdefault(sig, []).append(price)
 
