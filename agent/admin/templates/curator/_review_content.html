@@ -128,7 +128,7 @@
         </td>
         <td class="px-4 py-3 text-xs text-gray-700">{{ p._measure_label or '—' }}</td>
         <td class="px-4 py-3 text-right text-xs font-mono text-gray-700">
-          {% if p.estimated_price is not none %}${{ '%.2f'|format(p.estimated_price) }}{% else %}—{% endif %}
+          {% if p.get('estimated_price') is not none %}${{ '%.2f'|format(p.estimated_price) }}{% else %}—{% endif %}
         </td>
         <td class="px-4 py-3">
           <span class="font-mono text-[10px] text-gray-400" title="{{ p.match_key or '' }}">{{ (p.match_key or '—')[:8] }}{% if p.match_key %}...{% endif %}</span>
@@ -183,7 +183,7 @@
             <td class="px-4 py-2 text-xs font-medium text-gray-700">{{ p.name | truncate(40) }}</td>
             <td class="px-4 py-2 text-xs font-mono text-gray-500">{{ lp.location_id or '—' }}</td>
             <td class="px-4 py-2 text-xs text-gray-700">{{ lp.store_name or '—' }}</td>
-            <td class="px-4 py-2 text-right text-xs font-mono">{% if lp.amount is not none %}${{ '%.2f'|format(lp.amount) }}{% else %}—{% endif %}</td>
+            <td class="px-4 py-2 text-right text-xs font-mono">{% if lp.get('amount') is not none %}${{ '%.2f'|format(lp.amount) }}{% else %}—{% endif %}</td>
             <td class="px-4 py-2 text-xs text-gray-500">{{ lp.currency or 'JMD' }}</td>
           </tr>
           {% endfor %}
