@@ -664,10 +664,13 @@ def _collect_price_anomalies(
     top_k: int = 25,
     ratio_threshold: float = PRICE_ANOMALY_RATIO,
 ) -> list[dict[str, Any]]:
-    """Find products sharing the same normalized_name where cross-store prices
-    differ by more than *ratio_threshold*.  A 4x price gap for the same size
-    usually means one product has the wrong size attached to its price
-    (e.g. the 517g price was stored under a 184g record)."""
+    """Flag clusters where a big price gap is suspicious — i.e. the products
+    share the **same** size/pack (so the price shouldn't vary that much), or
+    one or more products are **missing** size info entirely.
+
+    Clusters where every product has a *different* size are expected to have
+    different prices (e.g. 184 g at $477 vs 517 g at $1 205) and are skipped.
+    """
     dismissed = _dismissed_names(mongo, "price-anomalies")
     excluded = [None, ""] + list(dismissed)
 
@@ -705,23 +708,60 @@ def _collect_price_anomalies(
         },
         {"$match": {"price_ratio": {"$gte": ratio_threshold}}},
         {"$sort": {"price_ratio": -1}},
-        {"$limit": top_k},
+        # Fetch extra so we can filter out legitimate size-based differences
+        {"$limit": top_k * 4},
     ]
 
     rows = list(mongo.products.aggregate(pipeline))
     results: list[dict[str, Any]] = []
     for row in rows:
+        if len(results) >= top_k:
+            break
         normalized_name = str(row.get("_id", "")).strip()
         if not normalized_name:
             continue
+
+        # ── Check if the price gap is suspicious ──
+        # Build per-product entries with their size signature and price.
+        entries = row.get("prices") or []
+        sig_to_prices: dict[tuple, list[float]] = {}
+        has_missing_size = False
+        for entry in entries:
+            si = _size_info_from_doc({"size": entry.get("size") or {}})
+            sig = _size_signature(si)
+            price = entry.get("price")
+            if price is None:
+                continue
+            if sig == (None, None, None):
+                has_missing_size = True
+            sig_to_prices.setdefault(sig, []).append(price)
+
+        # Check if any single size-group has a big price gap
+        same_size_anomaly = False
+        for prices_in_group in sig_to_prices.values():
+            if len(prices_in_group) < 2:
+                continue
+            mn, mx = min(prices_in_group), max(prices_in_group)
+            if mn > 0 and mx / mn >= ratio_threshold:
+                same_size_anomaly = True
+                break
+
+        # Skip if every product has a distinct size and none are missing —
+        # the price difference is expected.
+        if not same_size_anomaly and not has_missing_size:
+            continue
+
         sample_names = _non_empty(row.get("sample_names") or [])
         stores = _non_empty(row.get("stores") or [])
         size_docs = [{"size": sd} for sd in (row.get("sizes") or [])]
         packs, measures = _split_size_labels_from_docs(size_docs)
 
+        # Reason tag for the UI
+        reason = "missing size" if has_missing_size else "same size, different price"
+
         # Build per-store price breakdown for display
         price_details = []
-        for entry in row.get("prices") or []:
+        for entry in entries:
             si = _size_info_from_doc({"size": entry.get("size") or {}})
             price_details.append(
                 {
@@ -744,6 +784,7 @@ def _collect_price_anomalies(
                 "max_price": round(row.get("max_price", 0), 2),
                 "price_ratio": round(row.get("price_ratio", 0), 1),
                 "price_details": price_details,
+                "anomaly_reason": reason,
             }
         )
     return results
