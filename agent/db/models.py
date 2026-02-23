@@ -98,6 +98,18 @@ class ScrapeJob(BaseModel):
         populate_by_name = True
 
 
+class BarcodeMapping(BaseModel):
+    id: str | None = Field(default=None, alias="_id")
+    barcode: str
+    product_id: str
+    source: str  # "hilo_scrape", "user_scan", "openfoodfacts"
+    product_name: str | None = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+
+
 __all__ = [
     "LocationPrice",
     "SizeInfo",
@@ -107,4 +119,5 @@ __all__ = [
     "ScrapeJob",
     "ScrapeJobStats",
     "ScrapeJobError",
+    "BarcodeMapping",
 ]

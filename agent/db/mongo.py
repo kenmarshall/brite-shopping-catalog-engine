@@ -35,6 +35,8 @@ class MongoService:
         self.curator_actions = self.db["curator_actions"]
         self.curator_snapshots = self.db["curator_snapshots"]
         self.curator_dismissed = self.db["curator_dismissed"]
+        self.store_settings = self.db["store_settings"]
+        self.barcode_mappings = self.db["barcode_mappings"]
         self._ensure_indexes()
 
     def _ensure_indexes(self) -> None:
@@ -56,6 +58,13 @@ class MongoService:
                 [("normalized_name", ASCENDING), ("section", ASCENDING)],
                 unique=True,
             )
+            self.store_settings.create_index(
+                [("store_id", ASCENDING)], unique=True,
+            )
+            self.barcode_mappings.create_index(
+                [("barcode", ASCENDING)], unique=True,
+            )
+            self.barcode_mappings.create_index([("product_id", ASCENDING)])
         except Exception as exc:  # pragma: no cover
             LOGGER.debug("Index creation skipped: %s", exc)
 
@@ -156,6 +165,36 @@ class MongoService:
         except Exception:
             return None
         return self.jobs.find_one({"_id": oid})
+
+    # ---- Barcode mappings ----
+
+    def upsert_barcode(
+        self,
+        barcode: str,
+        product_id: str,
+        source: str,
+        product_name: str | None = None,
+    ) -> bool:
+        """Insert or update a barcode→product mapping. Returns True if new."""
+        from datetime import datetime, timezone
+
+        result = self.barcode_mappings.update_one(
+            {"barcode": barcode},
+            {
+                "$set": {
+                    "barcode": barcode,
+                    "product_id": product_id,
+                    "source": source,
+                    "product_name": product_name,
+                    "created_at": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+        return result.upserted_id is not None
+
+    def lookup_barcode(self, barcode: str) -> dict[str, Any] | None:
+        return self.barcode_mappings.find_one({"barcode": barcode})
 
 
 __all__ = ["MongoService"]

@@ -2079,7 +2079,14 @@ def _stores_payload(mongo: MongoService) -> list[dict[str, Any]]:
     sources = _load_sources()
     pipeline = [{"$group": {"_id": "$store_id", "count": {"$sum": 1}}}]
     counts = {row["_id"]: row["count"] for row in mongo.products.aggregate(pipeline)}
-    return _decorate_sources(sources, counts)
+    visibility = {
+        doc["store_id"]: doc.get("visible", True)
+        for doc in mongo.store_settings.find({}, {"store_id": 1, "visible": 1})
+    }
+    rows = _decorate_sources(sources, counts)
+    for row in rows:
+        row["visible"] = visibility.get(row["source_id"], True)
+    return rows
 
 
 @router.get("/stores", response_class=HTMLResponse)
@@ -2109,6 +2116,28 @@ async def store_table_partial(request: Request):
             "request": request,
             "sources": _stores_payload(mongo),
         },
+    )
+
+
+@router.post("/stores/toggle-visibility", response_class=HTMLResponse)
+async def store_toggle_visibility(
+    request: Request,
+    store_id: str = Form(...),
+):
+    mongo = _get_mongo()
+    current = mongo.store_settings.find_one({"store_id": store_id})
+    new_visible = not current.get("visible", True) if current else False
+    mongo.store_settings.update_one(
+        {"store_id": store_id},
+        {"$set": {"visible": new_visible}},
+        upsert=True,
+    )
+    label = "visible" if new_visible else "hidden"
+    return _feedback_response(
+        request,
+        fallback_path="/admin/stores",
+        message=f"Store '{store_id}' is now {label} in the app",
+        events=["admin:stores-refresh"],
     )
 
 

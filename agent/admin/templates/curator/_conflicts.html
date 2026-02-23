@@ -87,6 +87,11 @@
   <div class="border-b px-5 py-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h3 class="text-lg font-semibold">Brand Conflicts</h3>
+      <div class="inline-flex items-center gap-2">
+        <form method="post" action="/admin/curator/scan/conflicts" class="async-action-form inline" hx-post="/admin/curator/scan/conflicts" hx-swap="none">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button type="submit" class="rounded-md border border-gray-300 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100" data-loading-text="Scanning...">Scan</button>
+        </form>
       <form method="post" action="/admin/curator/normalize-brand-all" class="curator-action-form async-action-form inline" hx-post="/admin/curator/normalize-brand-all" hx-target="#tbody-brand-conflicts" hx-swap="innerHTML swap:150ms">
         <input type="hidden" name="limit" value="{{ limit }}">
         {% for row in brand_conflicts %}
@@ -100,6 +105,7 @@
           Normalize All
         </button>
       </form>
+      </div>
     </div>
   </div>
   <div class="overflow-x-auto">
@@ -165,6 +171,11 @@
   <div class="border-b px-5 py-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h3 class="text-lg font-semibold">Category Conflicts</h3>
+      <div class="inline-flex items-center gap-2">
+        <form method="post" action="/admin/curator/scan/conflicts" class="async-action-form inline" hx-post="/admin/curator/scan/conflicts" hx-swap="none">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button type="submit" class="rounded-md border border-gray-300 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100" data-loading-text="Scanning...">Scan</button>
+        </form>
       <form method="post" action="/admin/curator/normalize-category-all" class="curator-action-form async-action-form inline" hx-post="/admin/curator/normalize-category-all" hx-target="#tbody-category-conflicts" hx-swap="innerHTML swap:150ms">
         <input type="hidden" name="limit" value="{{ limit }}">
         {% for row in category_conflicts %}
@@ -178,6 +189,7 @@
           Normalize All
         </button>
       </form>
+      </div>
     </div>
   </div>
   <div class="overflow-x-auto">

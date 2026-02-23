@@ -6,11 +6,12 @@
       <th class="px-4 py-3">Strategy</th>
       <th class="px-4 py-3">Base URL</th>
       <th class="px-4 py-3 text-right">Products</th>
+      <th class="px-4 py-3 text-center">Visible</th>
     </tr>
   </thead>
   <tbody class="divide-y">
     {% for source in sources %}
-    <tr class="hover:bg-gray-50">
+    <tr class="hover:bg-gray-50{% if not source.visible %} opacity-50{% endif %}">
       <td class="px-4 py-3 font-medium text-gray-800">{{ source.display_name }}</td>
       <td class="px-4 py-3 font-mono text-xs text-gray-600">{{ source.source_id }}</td>
       <td class="px-4 py-3">
@@ -24,11 +25,24 @@
         {% endif %}
       </td>
       <td class="px-4 py-3 text-right font-mono">{{ "{:,}".format(source.product_count) }}</td>
+      <td class="px-4 py-3 text-center">
+        <form method="post" action="/admin/stores/toggle-visibility" class="async-action-form inline" hx-post="/admin/stores/toggle-visibility" hx-swap="none">
+          <input type="hidden" name="store_id" value="{{ source.source_id }}">
+          <button
+            type="submit"
+            class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium transition-colors {% if source.visible %}bg-green-50 text-green-700 hover:bg-green-100{% else %}bg-red-50 text-red-700 hover:bg-red-100{% endif %}"
+            data-loading-text="..."
+            title="{% if source.visible %}Click to hide from app{% else %}Click to show in app{% endif %}"
+          >
+            {% if source.visible %}Shown{% else %}Hidden{% endif %}
+          </button>
+        </form>
+      </td>
     </tr>
     {% endfor %}
     {% if not sources %}
     <tr>
-      <td colspan="5" class="px-4 py-10 text-center text-gray-400">No store sources configured</td>
+      <td colspan="6" class="px-4 py-10 text-center text-gray-400">No store sources configured</td>
     </tr>
     {% endif %}
   </tbody>

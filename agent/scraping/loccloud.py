@@ -240,6 +240,7 @@ def parse_catalog_xml(xml_text: str) -> list[RawProduct]:
                 brand_hint=brand,
                 category_hint=category,
                 url=f"{SPA_URL}&item={barcode}" if barcode else SPA_URL,
+                barcode=barcode if barcode else None,
             )
         )
 

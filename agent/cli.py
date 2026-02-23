@@ -553,6 +553,62 @@ def dedup_audit(
         typer.echo("Merge mode not yet implemented. Use the admin dashboard to review and merge.")
 
 
+@app.command(name="seed-barcodes")
+def seed_barcodes(
+    store_id: str = typer.Option("hilo", "--store-id", help="Store to extract barcodes from"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without writing"),
+) -> None:
+    """Extract barcodes from existing Hi-Lo product URLs and populate barcode_mappings.
+
+    Hi-Lo product URLs contain the barcode in the `item` query param:
+      ...&item=5012345678901
+    This command reads existing products from MongoDB and seeds the barcode DB
+    without re-scraping.
+    """
+    import re
+    from urllib.parse import parse_qs, urlparse
+
+    mongo = MongoService()
+    products = mongo.list_products({"store_id": store_id, "url": {"$regex": r"item="}})
+    typer.echo(f"Found {len(products)} {store_id} products with item= in URL")
+
+    seeded = 0
+    skipped = 0
+    for doc in products:
+        url = doc.get("url", "")
+        parsed = urlparse(url)
+        # item= may be in query or fragment (Hi-Lo uses hash-based routing)
+        params = parse_qs(parsed.query) or parse_qs(parsed.fragment.split("?", 1)[-1] if "?" in parsed.fragment else "")
+        barcode_values = params.get("item", [])
+        if not barcode_values:
+            # Fallback: regex extract from full URL
+            m = re.search(r"[&?]item=(\d{4,})", url)
+            if m:
+                barcode_values = [m.group(1)]
+        if not barcode_values:
+            skipped += 1
+            continue
+
+        barcode = barcode_values[0].strip()
+        if not barcode or not barcode.isdigit():
+            skipped += 1
+            continue
+
+        product_id = str(doc["_id"])
+        product_name = doc.get("name", "")
+
+        if dry_run:
+            typer.echo(f"  {barcode:15s} → {product_name[:60]}")
+        else:
+            mongo.upsert_barcode(barcode, product_id, f"{store_id}_seed", product_name)
+        seeded += 1
+
+    typer.echo(
+        f"{'Would seed' if dry_run else 'Seeded'} {seeded} barcodes "
+        f"(skipped {skipped} products without barcodes)"
+    )
+
+
 def main() -> None:
     app()
 

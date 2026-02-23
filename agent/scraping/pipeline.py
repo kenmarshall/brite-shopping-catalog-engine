@@ -353,11 +353,15 @@ async def _scrape_loccloud(store_id: str, config: dict[str, Any]) -> dict[str, A
             product.updated_at = datetime.utcnow()
             product.created_at = datetime.utcnow()
             product = await enrich_product(product)
-            _, created = mongo.upsert_product(product)
+            product_id, created = mongo.upsert_product(product)
             if created:
                 stats.saved += 1
             else:
                 stats.updated += 1
+            if raw.barcode:
+                mongo.upsert_barcode(
+                    raw.barcode, str(product_id), "hilo_scrape", raw.name,
+                )
 
         _mark_done(mongo, job_id, stats)
     except Exception as exc:

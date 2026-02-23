@@ -29,6 +29,7 @@ class RawProduct:
     brand_hint: str | None
     category_hint: str | None
     url: str
+    barcode: str | None = None
 
 
 def parse_products(
