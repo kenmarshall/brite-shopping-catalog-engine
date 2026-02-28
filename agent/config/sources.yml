@@ -1,6 +1,7 @@
 - source_id: "grace"
   entity_type: "brand"
   brand:
+    id: "grace-foods"
     name: "Grace"
   catalog_name: "Grace Foods"
   base_url: "https://gracefoods.com"

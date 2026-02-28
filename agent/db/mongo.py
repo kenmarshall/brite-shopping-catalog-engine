@@ -7,7 +7,7 @@ try:
 except ImportError:  # pragma: no cover
     certifi = None  # type: ignore[assignment]
 from bson import ObjectId
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient
 
 from agent.config.settings import get_settings
 from agent.db import models
@@ -40,33 +40,48 @@ class MongoService:
         self._ensure_indexes()
 
     def _ensure_indexes(self) -> None:
+        def _idx(collection, keys, **kwargs):  # type: ignore[no-untyped-def]
+            try:
+                collection.create_index(keys, **kwargs)
+            except Exception as exc:  # pragma: no cover
+                LOGGER.debug("Index skipped: %s", exc)
+
+        # Upgrade products text index to cover name + brand + category.
+        # MongoDB only allows one text index per collection — drop old ones first.
         try:
-            self.products.create_index([("name", "text")], name="product_text")
-            self.products.create_index([("tags", ASCENDING)])
-            self.products.create_index([("store_id", ASCENDING)])
-            self.products.create_index([("match_key", ASCENDING)])
-            self.products.create_index([("location_prices.location_id", ASCENDING)])
-            self.stores.create_index([("store_id", ASCENDING)], unique=True)
-            self.jobs.create_index([("status", ASCENDING)])
-            self.jobs.create_index([("started_at", ASCENDING)])
-            self.curator_actions.create_index([("status", ASCENDING)])
-            self.curator_actions.create_index([("created_at", ASCENDING)])
-            self.curator_actions.create_index([("normalized_name", ASCENDING)])
-            self.curator_snapshots.create_index([("snapshot_key", ASCENDING)], unique=True)
-            self.curator_snapshots.create_index([("updated_at", ASCENDING)])
-            self.curator_dismissed.create_index(
-                [("normalized_name", ASCENDING), ("section", ASCENDING)],
-                unique=True,
-            )
-            self.store_settings.create_index(
-                [("store_id", ASCENDING)], unique=True,
-            )
-            self.barcode_mappings.create_index(
-                [("barcode", ASCENDING)], unique=True,
-            )
-            self.barcode_mappings.create_index([("product_id", ASCENDING)])
+            for idx in list(self.products.list_indexes()):
+                if "_fts" in dict(idx.get("key", {})):
+                    self.products.drop_index(idx["name"])
         except Exception as exc:  # pragma: no cover
-            LOGGER.debug("Index creation skipped: %s", exc)
+            LOGGER.debug("Text index drop skipped: %s", exc)
+        _idx(
+            self.products,
+            [("name", "text"), ("brand", "text"), ("category", "text")],
+            name="products_search",
+            weights={"name": 10, "brand": 5, "category": 3},
+        )
+
+        _idx(self.products, [("updated_at", DESCENDING)])
+        _idx(self.products, [("tags", ASCENDING)])
+        _idx(self.products, [("store_id", ASCENDING)])
+        _idx(self.products, [("match_key", ASCENDING)])
+        _idx(self.products, [("location_prices.location_id", ASCENDING)])
+        _idx(self.stores, [("store_id", ASCENDING)], unique=True)
+        _idx(self.jobs, [("status", ASCENDING)])
+        _idx(self.jobs, [("started_at", ASCENDING)])
+        _idx(self.curator_actions, [("status", ASCENDING)])
+        _idx(self.curator_actions, [("created_at", ASCENDING)])
+        _idx(self.curator_actions, [("normalized_name", ASCENDING)])
+        _idx(self.curator_snapshots, [("snapshot_key", ASCENDING)], unique=True)
+        _idx(self.curator_snapshots, [("updated_at", ASCENDING)])
+        _idx(
+            self.curator_dismissed,
+            [("normalized_name", ASCENDING), ("section", ASCENDING)],
+            unique=True,
+        )
+        _idx(self.store_settings, [("store_id", ASCENDING)], unique=True)
+        _idx(self.barcode_mappings, [("barcode", ASCENDING)], unique=True)
+        _idx(self.barcode_mappings, [("product_id", ASCENDING)])
 
     def upsert_product(self, product: models.Product) -> tuple[ObjectId, bool]:
         new_location_prices = product.location_prices

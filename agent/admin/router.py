@@ -459,7 +459,12 @@ def _collect_curator_conflicts(
             brand_conflicts.append(payload)
         if len(categories) > 1:
             category_conflicts.append(payload)
-        if len(match_keys) > 1 and not has_mixed_sizes:
+        # Flag any group where count > 1 and sizes are NOT mixed.
+        # This catches both:
+        #  - exact match_key duplicates (same hash, multiple docs — e.g. "Kraft Non Dairy Creamer" vs "Kraft Non Dairy Creamer .")
+        #  - near-duplicates with different match_keys (brand/size variation causing hash split)
+        count = int(row.get("count", 0))
+        if count > 1 and not has_mixed_sizes:
             match_key_conflicts.append(payload)
 
     return (
@@ -1401,6 +1406,13 @@ def _dashboard_recent_jobs(mongo: MongoService, limit: int = 10) -> list[dict[st
     return recent_jobs
 
 
+def _dashboard_recent_barcodes(mongo: MongoService, limit: int = 20) -> list[dict[str, Any]]:
+    recent = list(mongo.barcode_mappings.find().sort("created_at", -1).limit(limit))
+    for doc in recent:
+        doc["_id"] = str(doc["_id"])
+    return recent
+
+
 def _dashboard_snapshot(mongo: MongoService) -> dict[str, Any]:
     store_stats = _dashboard_store_stats(mongo)
     total_products = sum(s["count"] for s in store_stats)
@@ -1414,6 +1426,20 @@ def _dashboard_snapshot(mongo: MongoService) -> dict[str, Any]:
         "recent_jobs": recent_jobs,
         "running_count": running_count,
     }
+
+
+def _store_filter_options() -> list[dict[str, Any]]:
+    """Build store dropdown options from sources.yml (no DB query needed)."""
+    from agent.scraping.pipeline import resolve_catalog_identity
+
+    options = []
+    for source in _load_sources():
+        if source.get("entity_type", "store") != "store":
+            continue
+        sid = source.get("source_id", "")
+        catalog_id, _ = resolve_catalog_identity(source, sid)
+        options.append({"_id": catalog_id, "store_name": _source_display_name(source)})
+    return sorted(options, key=lambda x: x["store_name"])
 
 
 def _build_products_query(
@@ -1436,7 +1462,10 @@ def _build_products_query(
             }
         )
     if store:
-        conditions.append({"store_id": store})
+        # Match either top-level store_id (manual adds) or location_prices (scraped)
+        conditions.append(
+            {"$or": [{"store_id": store}, {"location_prices.location_id": store}]}
+        )
     if flagged == "1":
         conditions.append({"curator.manual_merge_flag": True})
     if photo == "missing":
@@ -1490,15 +1519,8 @@ def _product_list_payload(
         product["_pack_label"] = _format_pack(_si)
         product["_measure_label"] = _format_measure(_si)
 
-    store_pipeline = [
-        {"$group": {"_id": "$store_id", "store_name": {"$first": "$store_name"}}},
-        {"$sort": {"store_name": 1}},
-    ]
-    stores = list(mongo.products.aggregate(store_pipeline))
-
     return {
         "products": products,
-        "stores": stores,
         "total": total,
         "total_pages": total_pages,
         "page": page,
@@ -1570,6 +1592,46 @@ async def dashboard_recent_jobs_partial(request: Request):
     )
 
 
+@router.get("/dashboard/sections/recent-barcodes", response_class=HTMLResponse)
+async def dashboard_recent_barcodes_partial(request: Request):
+    mongo = _get_mongo()
+    recent_barcodes = _dashboard_recent_barcodes(mongo, limit=20)
+    return templates.TemplateResponse(
+        "dashboard/_recent_barcodes.html",
+        {
+            "request": request,
+            "recent_barcodes": recent_barcodes,
+        },
+    )
+
+
+@router.get("/db-status", response_class=HTMLResponse)
+async def db_status():
+    """Quick MongoDB ping — returns a status badge for the sidebar."""
+    try:
+        mongo = _get_mongo()
+        mongo.client.admin.command("ping")
+        return (
+            '<span class="inline-block w-2 h-2 rounded-full bg-green-400 mr-1.5"></span>'
+            '<span class="text-green-400">MongoDB connected</span>'
+        )
+    except Exception as exc:
+        LOGGER.warning("MongoDB ping failed: %s", exc)
+        return (
+            '<span class="inline-block w-2 h-2 rounded-full bg-red-400 mr-1.5 animate-pulse"></span>'
+            '<span class="text-red-400">MongoDB offline</span>'
+        )
+
+
+@router.delete("/barcodes/{barcode}")
+async def delete_barcode_mapping(barcode: str):
+    mongo = _get_mongo()
+    result = mongo.barcode_mappings.delete_one({"barcode": barcode})
+    if result.deleted_count == 0:
+        return {"ok": False, "message": "Not found"}
+    return {"ok": True}
+
+
 # ---- Products ----
 
 
@@ -1620,6 +1682,7 @@ async def product_list(
             },
         )
 
+    # Full-page render: load stores from YAML (no DB aggregation needed)
     return templates.TemplateResponse(
         "products/list.html",
         {
@@ -1628,6 +1691,7 @@ async def product_list(
             "error": error,
             "page_title": "Products",
             "active_nav": "products",
+            "stores": _store_filter_options(),
             **context,
         },
     )
@@ -2076,16 +2140,74 @@ async def product_delete_post(request: Request, product_id: str):
 
 
 def _stores_payload(mongo: MongoService) -> list[dict[str, Any]]:
+    from agent.scraping.pipeline import resolve_catalog_identity
+
     sources = _load_sources()
-    pipeline = [{"$group": {"_id": "$store_id", "count": {"$sum": 1}}}]
-    counts = {row["_id"]: row["count"] for row in mongo.products.aggregate(pipeline)}
-    visibility = {
-        doc["store_id"]: doc.get("visible", True)
-        for doc in mongo.store_settings.find({}, {"store_id": 1, "visible": 1})
+
+    # Build source_id → catalog_id map. These can differ: e.g. brand "grace" → "grace-foods"
+    catalog_id_map: dict[str, str] = {}
+    for source in sources:
+        sid = source.get("source_id", "")
+        catalog_id, _ = resolve_catalog_identity(source, sid)
+        catalog_id_map[sid] = catalog_id
+
+    # Count by location_prices[].location_id (scraped store products)
+    lp_pipeline = [
+        {"$unwind": {"path": "$location_prices", "preserveNullAndEmptyArrays": False}},
+        {"$group": {"_id": "$location_prices.location_id", "count": {"$sum": 1}}},
+    ]
+    counts_by_catalog: dict[str, int] = {
+        row["_id"]: row["count"]
+        for row in mongo.products.aggregate(lp_pipeline)
+        if row["_id"]
+    }
+    # Also count products with top-level store_id but empty location_prices
+    # (e.g. brand products with no price, or manually-added without store)
+    sid_pipeline = [
+        {"$match": {"store_id": {"$ne": None}, "location_prices": {"$size": 0}}},
+        {"$group": {"_id": "$store_id", "count": {"$sum": 1}}},
+    ]
+    for row in mongo.products.aggregate(sid_pipeline):
+        if row["_id"]:
+            counts_by_catalog[row["_id"]] = counts_by_catalog.get(row["_id"], 0) + row["count"]
+
+    # Map catalog_id counts back to source_id keys
+    counts: dict[str, int] = {
+        sid: counts_by_catalog.get(cid, 0)
+        for sid, cid in catalog_id_map.items()
+    }
+
+    # Sync entity_type + catalog_id from sources.yml → store_settings so the API can filter.
+    # catalog_id is the actual store_id used in MongoDB products (may differ from source_id).
+    for source in sources:
+        sid = source.get("source_id")
+        entity_type = source.get("entity_type", "store")
+        cid = catalog_id_map.get(sid or "", sid or "")
+        if sid:
+            mongo.store_settings.update_one(
+                {"store_id": sid},
+                {"$set": {"entity_type": entity_type, "catalog_id": cid}},
+                upsert=True,
+            )
+
+    settings_map = {
+        doc["store_id"]: doc
+        for doc in mongo.store_settings.find({}, {"store_id": 1, "visible": 1, "entity_type": 1})
+    }
+    # Load Google Place data keyed by source_id (store_id)
+    place_data = {
+        doc["store_id"]: doc
+        for doc in mongo.stores.find({}, {"store_id": 1, "place_id": 1, "address": 1, "latitude": 1, "longitude": 1})
+        if doc.get("store_id")
     }
     rows = _decorate_sources(sources, counts)
     for row in rows:
-        row["visible"] = visibility.get(row["source_id"], True)
+        settings = settings_map.get(row["source_id"], {})
+        row["visible"] = settings.get("visible", True)
+        row["entity_type"] = row.get("entity_type") or settings.get("entity_type", "store")
+        place = place_data.get(row["source_id"], {})
+        row["place_id"] = place.get("place_id")
+        row["place_address"] = place.get("address")
     return rows
 
 
@@ -2137,6 +2259,76 @@ async def store_toggle_visibility(
         request,
         fallback_path="/admin/stores",
         message=f"Store '{store_id}' is now {label} in the app",
+        events=["admin:stores-refresh"],
+    )
+
+
+@router.get("/stores/{source_id}/set-place", response_class=HTMLResponse)
+async def store_set_place_panel(source_id: str, request: Request):
+    """Return the inline HTMX panel for editing a store's Google Place."""
+    mongo = _get_mongo()
+    place = mongo.stores.find_one({"store_id": source_id}, {"_id": 0}) or {}
+    return templates.TemplateResponse(
+        "stores/_set_place_panel.html",
+        {"request": request, "source_id": source_id, "place": place},
+    )
+
+
+@router.get("/stores/{source_id}/search-places", response_class=HTMLResponse)
+async def store_search_places(source_id: str, request: Request, name: str = Query("")):
+    """Proxy Google Places search via the Brite Shopping API."""
+    import os, httpx
+    if not name.strip():
+        return HTMLResponse("")
+    api_url = os.getenv("BRITE_API_URL", "https://brite-shopping-api.onrender.com")
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(f"{api_url}/stores/search", params={"name": name})
+            resp.raise_for_status()
+            stores = resp.json().get("stores", [])
+    except Exception as exc:
+        LOGGER.warning("Google Places proxy failed: %s", exc)
+        stores = []
+    return templates.TemplateResponse(
+        "stores/_place_results.html",
+        {"request": request, "source_id": source_id, "stores": stores},
+    )
+
+
+@router.post("/stores/{source_id}/set-place", response_class=HTMLResponse)
+async def store_save_place(
+    source_id: str,
+    request: Request,
+    place_id: str = Form(""),
+    place_name: str = Form(""),
+    place_address: str = Form(""),
+    latitude: str = Form(""),
+    longitude: str = Form(""),
+):
+    """Save Google Place data for a store to MongoDB."""
+    if not place_id.strip():
+        return HTMLResponse(
+            '<p class="text-red-600 text-sm mt-2">Place ID is required.</p>'
+        )
+    mongo = _get_mongo()
+    lat = float(latitude) if latitude else None
+    lng = float(longitude) if longitude else None
+    mongo.stores.update_one(
+        {"store_id": source_id},
+        {"$set": {
+            "store_id": source_id,
+            "place_id": place_id.strip(),
+            "store_name": place_name.strip() or None,
+            "address": place_address.strip() or None,
+            "latitude": lat,
+            "longitude": lng,
+        }},
+        upsert=True,
+    )
+    return _feedback_response(
+        request,
+        fallback_path="/admin/stores",
+        message=f"Location saved for '{source_id}'",
         events=["admin:stores-refresh"],
     )
 

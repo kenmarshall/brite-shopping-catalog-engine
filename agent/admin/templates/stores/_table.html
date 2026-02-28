@@ -3,8 +3,10 @@
     <tr>
       <th class="px-4 py-3">Store</th>
       <th class="px-4 py-3">Source ID</th>
+      <th class="px-4 py-3">Type</th>
       <th class="px-4 py-3">Strategy</th>
       <th class="px-4 py-3">Base URL</th>
+      <th class="px-4 py-3">Location</th>
       <th class="px-4 py-3 text-right">Products</th>
       <th class="px-4 py-3 text-center">Visible</th>
     </tr>
@@ -15,6 +17,15 @@
       <td class="px-4 py-3 font-medium text-gray-800">{{ source.display_name }}</td>
       <td class="px-4 py-3 font-mono text-xs text-gray-600">{{ source.source_id }}</td>
       <td class="px-4 py-3">
+        {% if source.entity_type == "store" %}
+        <span class="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">Store</span>
+        {% elif source.entity_type == "brand" %}
+        <span class="inline-flex rounded-full bg-purple-50 px-2 py-0.5 text-xs text-purple-700">Brand</span>
+        {% else %}
+        <span class="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{{ source.entity_type or "—" }}</span>
+        {% endif %}
+      </td>
+      <td class="px-4 py-3">
         <span class="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{{ source.strategy }}</span>
       </td>
       <td class="px-4 py-3 text-gray-600">
@@ -22,6 +33,36 @@
         <a href="{{ source.base_url }}" target="_blank" rel="noopener" class="text-brand hover:underline">{{ source.base_url }}</a>
         {% else %}
         —
+        {% endif %}
+      </td>
+      <td class="px-4 py-3">
+        {% if source.entity_type == "store" %}
+        <div id="set-place-container-{{ source.source_id }}">
+          {% if source.place_id %}
+          <div class="flex items-center gap-2">
+            <span class="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-xs text-green-700" title="{{ source.place_address or '' }}">
+              <span class="inline-block h-1.5 w-1.5 rounded-full bg-green-400"></span>
+              Linked
+            </span>
+            <button
+              class="text-xs text-gray-400 hover:text-brand"
+              hx-get="/admin/stores/{{ source.source_id }}/set-place"
+              hx-target="#set-place-container-{{ source.source_id }}"
+              hx-swap="innerHTML"
+              title="{{ source.place_address or source.place_id }}"
+            >Edit</button>
+          </div>
+          {% else %}
+          <button
+            class="text-xs text-brand hover:underline"
+            hx-get="/admin/stores/{{ source.source_id }}/set-place"
+            hx-target="#set-place-container-{{ source.source_id }}"
+            hx-swap="innerHTML"
+          >+ Set Location</button>
+          {% endif %}
+        </div>
+        {% else %}
+        <span class="text-xs text-gray-400">N/A</span>
         {% endif %}
       </td>
       <td class="px-4 py-3 text-right font-mono">{{ "{:,}".format(source.product_count) }}</td>
@@ -42,7 +83,7 @@
     {% endfor %}
     {% if not sources %}
     <tr>
-      <td colspan="6" class="px-4 py-10 text-center text-gray-400">No store sources configured</td>
+      <td colspan="8" class="px-4 py-10 text-center text-gray-400">No store sources configured</td>
     </tr>
     {% endif %}
   </tbody>

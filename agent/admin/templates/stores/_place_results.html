@@ -1,0 +1,25 @@
+{% if stores %}
+<div class="mt-1 divide-y rounded-lg border border-gray-200 bg-white text-sm overflow-hidden">
+  {% for store in stores %}
+  <form
+    method="post"
+    action="/admin/stores/{{ source_id }}/set-place"
+    class="async-action-form"
+    hx-post="/admin/stores/{{ source_id }}/set-place"
+    hx-swap="none"
+  >
+    <input type="hidden" name="place_id" value="{{ store.place_id }}">
+    <input type="hidden" name="place_name" value="{{ store.name }}">
+    <input type="hidden" name="place_address" value="{{ store.address or '' }}">
+    <input type="hidden" name="latitude" value="{{ store.latitude or '' }}">
+    <input type="hidden" name="longitude" value="{{ store.longitude or '' }}">
+    <button type="submit" class="w-full px-4 py-2.5 text-left hover:bg-gray-50 transition-colors" data-loading-text="Saving...">
+      <div class="font-medium text-gray-800">{{ store.name }}</div>
+      <div class="text-xs text-gray-500">{{ store.address }}</div>
+    </button>
+  </form>
+  {% endfor %}
+</div>
+{% elif stores is not none %}
+<p class="mt-1 text-xs text-gray-400">No places found. Try a different name or use manual entry.</p>
+{% endif %}

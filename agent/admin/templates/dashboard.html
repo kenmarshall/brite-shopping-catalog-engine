@@ -47,11 +47,21 @@
 
 <div
   id="dashboard-recent-jobs"
-  class="bg-white rounded-lg shadow"
+  class="bg-white rounded-lg shadow mb-8"
   hx-get="/admin/dashboard/sections/recent-jobs"
   hx-trigger="load, admin:dashboard-refresh from:body"
   hx-swap="innerHTML"
 >
   <div class="p-6 text-sm text-gray-500 animate-pulse">Loading recent jobs...</div>
+</div>
+
+<div
+  id="dashboard-recent-barcodes"
+  class="bg-white rounded-lg shadow"
+  hx-get="/admin/dashboard/sections/recent-barcodes"
+  hx-trigger="load, admin:dashboard-refresh from:body"
+  hx-swap="innerHTML"
+>
+  <div class="p-6 text-sm text-gray-500 animate-pulse">Loading recent barcode links...</div>
 </div>
 {% endblock %}

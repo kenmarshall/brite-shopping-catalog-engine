@@ -1,0 +1,56 @@
+<div class="px-5 py-4 border-b">
+  <h3 class="text-lg font-semibold">Recent Barcode Links</h3>
+</div>
+<table class="w-full text-sm">
+  <thead class="bg-gray-50">
+    <tr>
+      <th class="text-left px-5 py-3 font-medium text-gray-500">Barcode</th>
+      <th class="text-left px-5 py-3 font-medium text-gray-500">Product</th>
+      <th class="text-left px-5 py-3 font-medium text-gray-500">Source</th>
+      <th class="text-left px-5 py-3 font-medium text-gray-500">Linked</th>
+      <th class="px-5 py-3"></th>
+    </tr>
+  </thead>
+  <tbody class="divide-y">
+    {% for b in recent_barcodes %}
+    <tr class="hover:bg-gray-50" id="barcode-row-{{ b.barcode }}">
+      <td class="px-5 py-3 font-mono text-xs">{{ b.barcode }}</td>
+      <td class="px-5 py-3">
+        {% if b.product_id %}
+          <a href="/admin/products/{{ b.product_id }}" class="text-brand hover:underline">
+            {{ b.product_name or b.product_id }}
+          </a>
+        {% else %}
+          <span class="text-gray-400">—</span>
+        {% endif %}
+      </td>
+      <td class="px-5 py-3">
+        {% if b.source == "user_scan" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">user scan</span>
+        {% elif b.source == "hilo_scrape" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">hilo scrape</span>
+        {% elif b.source == "hilo_seed" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-800">hilo seed</span>
+        {% elif b.source == "openfoodfacts" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">open food facts</span>
+        {% else %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">{{ b.source }}</span>
+        {% endif %}
+      </td>
+      <td class="px-5 py-3 text-gray-500">{{ b.created_at.strftime('%Y-%m-%d %H:%M') if b.created_at else "—" }}</td>
+      <td class="px-5 py-3 text-right">
+        <button
+          class="text-xs text-red-600 hover:text-red-800 hover:underline"
+          hx-delete="/admin/barcodes/{{ b.barcode }}"
+          hx-confirm="Unlink barcode {{ b.barcode }}?"
+          hx-target="#barcode-row-{{ b.barcode }}"
+          hx-swap="outerHTML"
+        >Unlink</button>
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not recent_barcodes %}
+    <tr><td colspan="5" class="px-5 py-8 text-center text-gray-400">No barcode links yet</td></tr>
+    {% endif %}
+  </tbody>
+</table>

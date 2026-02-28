@@ -1,0 +1,72 @@
+<div class="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-4" id="set-place-panel-{{ source_id }}">
+  <h4 class="mb-3 text-sm font-semibold text-blue-900">Set Google Place — {{ source_id }}</h4>
+
+  {% if place.place_id %}
+  <div class="mb-3 rounded-md bg-white px-3 py-2 text-sm text-gray-700 border border-gray-200">
+    <span class="font-medium">Current:</span> {{ place.store_name or source_id }}
+    {% if place.address %} — {{ place.address }}{% endif %}
+    <span class="ml-2 font-mono text-xs text-gray-400">{{ place.place_id }}</span>
+  </div>
+  {% endif %}
+
+  <!-- Search input -->
+  <div class="flex gap-2">
+    <input
+      id="place-search-{{ source_id }}"
+      type="text"
+      placeholder="Search by store name..."
+      class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"
+      hx-get="/admin/stores/{{ source_id }}/search-places"
+      hx-trigger="input changed delay:400ms"
+      hx-target="#place-results-{{ source_id }}"
+      hx-include="[id='place-search-{{ source_id }}']"
+      name="name"
+    >
+  </div>
+
+  <!-- Results -->
+  <div id="place-results-{{ source_id }}" class="mt-2"></div>
+
+  <!-- Manual entry fallback -->
+  <details class="mt-3">
+    <summary class="cursor-pointer text-xs text-gray-500 hover:text-gray-700">Or enter Place ID manually</summary>
+    <form
+      method="post"
+      action="/admin/stores/{{ source_id }}/set-place"
+      class="mt-2 grid grid-cols-1 gap-2 async-action-form"
+      hx-post="/admin/stores/{{ source_id }}/set-place"
+      hx-swap="none"
+    >
+      <input name="place_id" placeholder="Place ID (ChIJ...)" required
+        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
+        value="{{ place.place_id or '' }}">
+      <input name="place_name" placeholder="Store name"
+        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
+        value="{{ place.store_name or '' }}">
+      <input name="place_address" placeholder="Address"
+        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
+        value="{{ place.address or '' }}">
+      <div class="flex gap-2">
+        <input name="latitude" placeholder="Latitude" type="number" step="any"
+          class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
+          value="{{ place.latitude or '' }}">
+        <input name="longitude" placeholder="Longitude" type="number" step="any"
+          class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
+          value="{{ place.longitude or '' }}">
+      </div>
+      <button type="submit" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark" data-loading-text="Saving...">
+        Save Location
+      </button>
+    </form>
+  </details>
+
+  <button
+    class="mt-3 text-xs text-gray-400 hover:text-gray-600"
+    hx-get="/admin/stores/{{ source_id }}/set-place"
+    hx-target="#set-place-container-{{ source_id }}"
+    hx-swap="innerHTML"
+    onclick="this.closest('[id^=set-place-panel]').outerHTML = ''"
+  >
+    Cancel
+  </button>
+</div>

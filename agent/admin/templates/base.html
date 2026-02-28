@@ -45,7 +45,18 @@
           <span class="mr-2">&#10024;</span> AI Curator
         </a>
       </nav>
-      <div class="px-5 py-3 border-t border-gray-700 text-xs text-gray-500">Local Admin Console</div>
+      <div class="px-5 py-3 border-t border-gray-700">
+        <div
+          class="flex items-center text-xs"
+          hx-get="/admin/db-status"
+          hx-trigger="load, every 30s"
+          hx-swap="innerHTML"
+        >
+          <span class="inline-block w-2 h-2 rounded-full bg-gray-500 mr-1.5 animate-pulse"></span>
+          <span class="text-gray-500">Checking...</span>
+        </div>
+        <div class="mt-1 text-xs text-gray-500">Local Admin Console</div>
+      </div>
     </aside>
 
     <div class="flex-1 min-w-0">
