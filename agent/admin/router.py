@@ -2186,7 +2186,11 @@ def _stores_payload(mongo: MongoService) -> list[dict[str, Any]]:
         if sid:
             mongo.store_settings.update_one(
                 {"store_id": sid},
-                {"$set": {"entity_type": entity_type, "catalog_id": cid}},
+                {"$set": {
+                    "entity_type": entity_type,
+                    "catalog_id": cid,
+                    "store_name": _source_display_name(source),
+                }},
                 upsert=True,
             )
 

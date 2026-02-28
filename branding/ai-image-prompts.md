@@ -8,18 +8,18 @@ Brand color: **Teal #0a7ea4** | Light: #4dc9f6 | Dark: #07556f
 
 ## App Logo (Text + Icon Mark)
 
-> A modern minimalist logo for "Brite Shopping", a Jamaican grocery price comparison app. The icon is a stylized shopping cart or price tag with a subtle checkmark, using teal (#0a7ea4) as the primary color. Clean, flat design with no gradients. The word "Brite" in bold sans-serif, "Shopping" in lighter weight. White background. Suitable for app icon and marketing materials. Professional, friendly, Caribbean-inspired freshness.
+> A modern minimalist logo for "Brite Shopping", a grocery price comparison app. The icon is a stylized shopping cart or price tag with a subtle checkmark, using teal (#0a7ea4) as the primary color. Clean, flat design with no gradients. The word "Brite" in bold sans-serif, "Shopping" in lighter weight. White background. Suitable for app icon and marketing materials. Professional, friendly, fresh and inviting.
 
 **Variations to try:**
 - Replace "shopping cart" with "price tag" or "magnifying glass over a price tag"
-- Try "with a small Jamaican flag accent" for local flavor
-- Try "with a subtle sun or tropical leaf element"
+- Try "with a subtle sun or leaf element" for freshness
+- Try "with a small spark or lightbulb accent" to convey "brite"
 
 ---
 
 ## App Icon (1024x1024, Square)
 
-> A square app icon for a grocery price comparison app called "Brite Shopping". Features a simple, bold shopping cart or price tag symbol in white on a solid teal (#0a7ea4) background. Minimalist flat design, rounded corners feel, no text, no gradients. Should be recognizable at very small sizes (like iOS/Android home screen icon). Modern, clean, Caribbean-inspired freshness. Single focal element.
+> A square app icon for a grocery price comparison app called "Brite Shopping". Features a simple, bold shopping cart or price tag symbol in white on a solid teal (#0a7ea4) background. Minimalist flat design, rounded corners feel, no text, no gradients. Should be recognizable at very small sizes (like iOS/Android home screen icon). Modern, clean, fresh. Single focal element.
 
 **Requirements:**
 - 1024x1024 PNG
@@ -41,13 +41,13 @@ Brand color: **Teal #0a7ea4** | Light: #4dc9f6 | Dark: #07556f
 
 ## Landing Page Hero Illustration
 
-> A flat vector illustration of a Jamaican shopper happily comparing grocery prices on their smartphone while standing in a colorful Caribbean market or supermarket. Teal (#0a7ea4) as the dominant accent color with warm secondary tones (yellow, orange). Modern flat illustration style, diverse representation, tropical vibes with grocery items visible (fruits, packaged goods, shopping bags). Clean white or light background. Wide aspect ratio suitable for a website hero section (roughly 16:9). Friendly and approachable mood.
+> A flat vector illustration of a shopper happily comparing grocery prices on their smartphone while standing in a modern, colorful supermarket. Teal (#0a7ea4) as the dominant accent color with warm secondary tones (yellow, orange). Modern flat illustration style, diverse representation, grocery items visible (fruits, packaged goods, shopping bags). Clean white or light background. Wide aspect ratio suitable for a website hero section (roughly 16:9). Friendly and approachable mood.
 
 ---
 
 ## Google Play Feature Graphic (1024x500)
 
-> A wide promotional banner for a grocery app. Shows "Brite Shopping" text on the left with tagline "Compare Grocery Prices Across Jamaica" below it. Right side has a simplified phone mockup showing price comparison results. Teal (#0a7ea4) gradient background. Clean, modern, professional. 1024x500 pixels. Bold sans-serif typography.
+> A wide promotional banner for a grocery app. Shows "Brite Shopping" text on the left with tagline "Compare Grocery Prices Across Stores" below it. Right side has a simplified phone mockup showing price comparison results. Teal (#0a7ea4) gradient background. Clean, modern, professional. 1024x500 pixels. Bold sans-serif typography.
 
 ---
 

@@ -1,14 +1,14 @@
 <!-- SYNC: When updating this file, also update AGENTS.md with the same changes (and vice versa). -->
 # Brite Shopping Catalog Engine
 
-Scraping, normalization, and semantic search service for Jamaican grocery products. Part of the Brite Shopping price comparison platform — helps Jamaican shoppers find products across stores/locations, compare prices, and shop economically.
+Scraping, normalization, and semantic search service for grocery products. Part of the Brite Shopping price comparison platform — helps shoppers find products across stores/locations, compare prices, and shop economically.
 
 ## Product Vision
-- Price comparison platform for Jamaican shoppers — the goal is to help users make **economical grocery choices** (cheaper brands, bulk/wholesale pricing, cheaper store locations)
+- Price comparison platform for shoppers — the goal is to help users make **economical grocery choices** (cheaper brands, bulk/wholesale pricing, cheaper store locations)
 - Products have an **estimated/average price** computed from all location prices
 - Each store location (physical or online) has its own price for a product
 - User flow: search → see product + estimated price → see all store locations + their prices → decide
-- A "store location" can be online as long as Jamaicans can access it
+- A "store location" can be online as long as it is accessible online
 - The app should let users **infer savings opportunities** from the data — we don't need to be explicit, the comparison logic should make it obvious
 
 ## Architecture

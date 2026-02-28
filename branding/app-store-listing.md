@@ -1,21 +1,21 @@
 # Brite Shopping — App Store Listing Content
 
 ## App Name
-**Brite Shopping — Jamaica Grocery Prices**
+**Brite Shopping — Compare Grocery Prices**
 
 ---
 
 ## Short Description (80 characters)
-Compare grocery prices across Jamaican stores. Save money every trip.
+Compare grocery prices across multiple stores. Save money every trip.
 
 ---
 
 ## Full Description
 
-Brite Shopping helps Jamaican shoppers find the best grocery prices across multiple stores — all in one app.
+Brite Shopping helps shoppers find the best grocery prices across multiple stores — all in one app.
 
 **Search & Compare**
-Browse thousands of products from Hi-Lo, ShopSampars, Store To Door, CoolMarket, and more. See the estimated average price and compare what each store charges — so you always know where to get the best deal.
+Browse thousands of products across multiple grocery stores. See the estimated average price and compare what each store charges — so you always know where to get the best deal.
 
 **Scan Barcodes**
 Use your phone's camera to scan any product barcode. Instantly see prices at other stores so you can decide if you're getting a fair price — right there in the aisle.
@@ -24,22 +24,21 @@ Use your phone's camera to scan any product barcode. Instantly see prices at oth
 Create and manage your shopping list. Keep track of what you need and plan your grocery trips. All stored locally on your device.
 
 **Key Features:**
-- Search thousands of Jamaican grocery products
-- Compare prices across 5+ stores
+- Search thousands of grocery products
+- Compare prices across multiple stores
 - Barcode scanner for in-store price checks
 - Shopping list with easy add/remove
-- All prices in JMD
 - No account required — completely anonymous
 - Free to use
 
-Whether you're shopping for your household or stocking up for the week, Brite Shopping helps you make smarter choices with real price data from stores across Jamaica.
+Whether you're shopping for your household or stocking up for the week, Brite Shopping helps you make smarter choices with real price data from stores you shop at.
 
 Download now and start saving.
 
 ---
 
 ## Keywords
-grocery, prices, Jamaica, compare, shopping, deals, supermarket, Hi-Lo, barcode, savings, food, price check, cheap, budget
+grocery, prices, compare, shopping, deals, supermarket, barcode, savings, food, price check, cheap, budget, price comparison
 
 ---
 
@@ -67,7 +66,7 @@ support@briteshopping.com
 
 ## Screenshot Descriptions (for frame text overlays)
 
-1. **Search screen**: "Search thousands of Jamaican grocery products"
+1. **Search screen**: "Search thousands of grocery products"
 2. **Product detail**: "Compare prices across multiple stores"
 3. **Barcode scanner**: "Scan barcodes for instant price checks"
 4. **Shopping list**: "Build and manage your shopping list"
@@ -89,4 +88,4 @@ support@briteshopping.com
 ---
 
 ## What's New (for first release)
-Initial release! Compare grocery prices across Jamaica's top stores. Features include multi-store search, barcode scanning, and shopping lists.
+Initial release! Compare grocery prices across multiple stores. Features include multi-store search, barcode scanning, and shopping lists.
