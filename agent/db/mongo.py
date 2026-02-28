@@ -66,11 +66,17 @@ class MongoService:
         _idx(self.products, [("store_id", ASCENDING)])
         _idx(self.products, [("match_key", ASCENDING)])
         _idx(self.products, [("location_prices.location_id", ASCENDING)])
+        # Curator aggregations group/filter by normalized_name heavily
+        _idx(self.products, [("normalized_name", ASCENDING)])
+        # Manual merge flag queries filter on this field
+        _idx(self.products, [("curator.manual_merge_flag", ASCENDING)])
+        # Price anomaly pipeline filters on estimated_price > 0
+        _idx(self.products, [("estimated_price", ASCENDING)])
         _idx(self.stores, [("store_id", ASCENDING)], unique=True)
         _idx(self.jobs, [("status", ASCENDING)])
-        _idx(self.jobs, [("started_at", ASCENDING)])
+        _idx(self.jobs, [("started_at", DESCENDING)])
         _idx(self.curator_actions, [("status", ASCENDING)])
-        _idx(self.curator_actions, [("created_at", ASCENDING)])
+        _idx(self.curator_actions, [("created_at", DESCENDING)])
         _idx(self.curator_actions, [("normalized_name", ASCENDING)])
         _idx(self.curator_snapshots, [("snapshot_key", ASCENDING)], unique=True)
         _idx(self.curator_snapshots, [("updated_at", ASCENDING)])
@@ -82,6 +88,8 @@ class MongoService:
         _idx(self.store_settings, [("store_id", ASCENDING)], unique=True)
         _idx(self.barcode_mappings, [("barcode", ASCENDING)], unique=True)
         _idx(self.barcode_mappings, [("product_id", ASCENDING)])
+        # Dashboard recent barcodes sorts by created_at DESC
+        _idx(self.barcode_mappings, [("created_at", DESCENDING)])
 
     def upsert_product(self, product: models.Product) -> tuple[ObjectId, bool]:
         new_location_prices = product.location_prices

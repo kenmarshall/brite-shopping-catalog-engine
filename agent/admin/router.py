@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -824,28 +825,47 @@ def _build_curator_snapshot(
     row_cap: int = CURATOR_SNAPSHOT_ROW_CAP,
 ) -> dict[str, Any]:
     capped_limit = _curator_row_limit(row_cap)
-    brand_conflicts, category_conflicts, match_key_conflicts = _collect_curator_conflicts(
-        mongo,
-        top_k=capped_limit,
-        include_sizes=True,
-    )
-    manual_merge_flags, flagged_product_total = _collect_manual_merge_flags(
-        mongo,
-        top_k=capped_limit,
-    )
-    name_cleanup_candidates, name_cleanup_total = _collect_name_cleanup_candidates(
-        mongo,
-        top_k=capped_limit,
-        compute_total=False,
-    )
-    missing_photo_candidates, missing_photo_total = _collect_missing_photo_candidates(
-        mongo,
-        top_k=capped_limit,
-    )
-    price_anomalies = _collect_price_anomalies(
-        mongo,
-        top_k=capped_limit,
-    )
+
+    # Run all curator collectors in parallel — each is an independent MongoDB
+    # aggregation/query.  PyMongo is thread-safe so sharing the MongoService is fine.
+    results: dict[str, Any] = {}
+
+    def _run_conflicts():
+        results["conflicts"] = _collect_curator_conflicts(
+            mongo, top_k=capped_limit, include_sizes=True,
+        )
+
+    def _run_manual_flags():
+        results["manual_flags"] = _collect_manual_merge_flags(
+            mongo, top_k=capped_limit,
+        )
+
+    def _run_name_cleanup():
+        results["name_cleanup"] = _collect_name_cleanup_candidates(
+            mongo, top_k=capped_limit, compute_total=False,
+        )
+
+    def _run_missing_photos():
+        results["missing_photos"] = _collect_missing_photo_candidates(
+            mongo, top_k=capped_limit,
+        )
+
+    def _run_price_anomalies():
+        results["price_anomalies"] = _collect_price_anomalies(
+            mongo, top_k=capped_limit,
+        )
+
+    tasks = [_run_conflicts, _run_manual_flags, _run_name_cleanup, _run_missing_photos, _run_price_anomalies]
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        futures = [pool.submit(fn) for fn in tasks]
+        for future in as_completed(futures):
+            future.result()  # re-raise any exceptions
+
+    brand_conflicts, category_conflicts, match_key_conflicts = results["conflicts"]
+    manual_merge_flags, flagged_product_total = results["manual_flags"]
+    name_cleanup_candidates, name_cleanup_total = results["name_cleanup"]
+    missing_photo_candidates, missing_photo_total = results["missing_photos"]
+    price_anomalies = results["price_anomalies"]
 
     now = datetime.utcnow()
     return {
@@ -1413,21 +1433,6 @@ def _dashboard_recent_barcodes(mongo: MongoService, limit: int = 20) -> list[dic
     return recent
 
 
-def _dashboard_snapshot(mongo: MongoService) -> dict[str, Any]:
-    store_stats = _dashboard_store_stats(mongo)
-    total_products = sum(s["count"] for s in store_stats)
-    recent_jobs = _dashboard_recent_jobs(mongo, limit=10)
-    running_count = mongo.jobs.count_documents(
-        {"status": {"$in": ["running", "stopping", "cancel_requested"]}}
-    )
-    return {
-        "store_stats": store_stats,
-        "total_products": total_products,
-        "recent_jobs": recent_jobs,
-        "running_count": running_count,
-    }
-
-
 def _store_filter_options() -> list[dict[str, Any]]:
     """Build store dropdown options from sources.yml (no DB query needed)."""
     from agent.scraping.pipeline import resolve_catalog_identity
@@ -1507,7 +1512,11 @@ def _product_list_payload(
     products = list(
         mongo.products.find(query, {"embedding": 0}).sort("updated_at", -1).skip(skip).limit(limit)
     )
-    total = mongo.products.count_documents(query)
+    total = (
+        mongo.products.estimated_document_count()
+        if not query
+        else mongo.products.count_documents(query)
+    )
     total_pages = max(math.ceil(total / limit), 1) if limit else 1
     for product in products:
         product["_id"] = str(product["_id"])
@@ -1562,19 +1571,6 @@ async def dashboard_stats_partial(request: Request):
             "total_products": total_products,
             "store_stats": store_stats,
             "running_count": running_count,
-        },
-    )
-
-
-@router.get("/dashboard/sections/store-stats", response_class=HTMLResponse)
-async def dashboard_store_stats_partial(request: Request):
-    mongo = _get_mongo()
-    store_stats = _dashboard_store_stats(mongo)
-    return templates.TemplateResponse(
-        "dashboard/_store_stats.html",
-        {
-            "request": request,
-            "store_stats": store_stats,
         },
     )
 
@@ -2179,20 +2175,27 @@ def _stores_payload(mongo: MongoService) -> list[dict[str, Any]]:
 
     # Sync entity_type + catalog_id from sources.yml → store_settings so the API can filter.
     # catalog_id is the actual store_id used in MongoDB products (may differ from source_id).
+    from pymongo import UpdateOne
+
+    bulk_ops = []
     for source in sources:
         sid = source.get("source_id")
         entity_type = source.get("entity_type", "store")
         cid = catalog_id_map.get(sid or "", sid or "")
         if sid:
-            mongo.store_settings.update_one(
-                {"store_id": sid},
-                {"$set": {
-                    "entity_type": entity_type,
-                    "catalog_id": cid,
-                    "store_name": _source_display_name(source),
-                }},
-                upsert=True,
+            bulk_ops.append(
+                UpdateOne(
+                    {"store_id": sid},
+                    {"$set": {
+                        "entity_type": entity_type,
+                        "catalog_id": cid,
+                        "store_name": _source_display_name(source),
+                    }},
+                    upsert=True,
+                )
             )
+    if bulk_ops:
+        mongo.store_settings.bulk_write(bulk_ops, ordered=False)
 
     settings_map = {
         doc["store_id"]: doc

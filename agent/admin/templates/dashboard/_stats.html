@@ -12,3 +12,8 @@
     {{ running_count }}
   </p>
 </div>
+
+{# OOB: fill the store-stats table in a single round-trip #}
+<div id="dashboard-store-stats" hx-swap-oob="innerHTML">
+  {% include "dashboard/_store_stats.html" %}
+</div>
