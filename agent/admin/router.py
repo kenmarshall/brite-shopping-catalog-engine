@@ -59,8 +59,17 @@ _EMPTY_ROW_NAME_SIZE = '<tr><td colspan="5" class="px-4 py-10 text-center text-g
 _EMPTY_ROW_PHOTOS = '<tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">No missing-photo products found</td></tr>'
 
 
+_mongo_instance: MongoService | None = None
+_mongo_lock = threading.Lock()
+
+
 def _get_mongo() -> MongoService:
-    return MongoService()
+    global _mongo_instance
+    if _mongo_instance is None:
+        with _mongo_lock:
+            if _mongo_instance is None:
+                _mongo_instance = MongoService()
+    return _mongo_instance
 
 
 def _sources_path() -> Path:
