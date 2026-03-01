@@ -410,7 +410,9 @@ def _collect_curator_conflicts(
     dismissed = _dismissed_names(mongo, "conflicts")
     pipeline_limit = min(max(top_k * 8, top_k), 5000)
     excluded = [None, ""] + list(dismissed)
-    pipeline = [
+
+    # ── Brand / category conflicts (group by normalized_name) ──
+    name_pipeline = [
         {"$match": {"normalized_name": {"$nin": excluded}}},
         {
             "$group": {
@@ -428,11 +430,10 @@ def _collect_curator_conflicts(
         {"$sort": {"count": -1}},
         {"$limit": pipeline_limit},
     ]
-    rows = list(mongo.products.aggregate(pipeline))
+    rows = list(mongo.products.aggregate(name_pipeline))
 
     brand_conflicts: list[dict[str, Any]] = []
     category_conflicts: list[dict[str, Any]] = []
-    match_key_conflicts: list[dict[str, Any]] = []
 
     for row in rows:
         normalized_name = str(row.get("_id", "")).strip()
@@ -445,8 +446,9 @@ def _collect_curator_conflicts(
         categories = _non_empty(row.get("categories") or [])
         match_keys = _non_empty(row.get("match_keys") or [])
         size_docs = [{"size": size_doc} for size_doc in (row.get("sizes") or [])]
-        size_signatures = _size_signatures_from_docs(size_docs)
-        has_mixed_sizes = len(size_signatures) > 1
+
+        if len(brands) <= 1 and len(categories) <= 1:
+            continue
 
         payload = {
             "normalized_name": normalized_name,
@@ -469,13 +471,65 @@ def _collect_curator_conflicts(
             brand_conflicts.append(payload)
         if len(categories) > 1:
             category_conflicts.append(payload)
-        # Flag when products outnumber unique sizes — at least one size
-        # has multiple docs that should likely be merged.  This catches:
-        #  - all-same-size duplicates (old behaviour)
-        #  - mixed-size groups where SOME sizes repeat (e.g. 225g, 400g, 800g, 800g)
-        count = int(row.get("count", 0))
-        if count > len(size_signatures):
-            match_key_conflicts.append(payload)
+
+    # ── Merge misses (group by normalized_name + size) ──
+    # Products that share the same name AND same size/pack but exist as
+    # separate documents are merge misses.  Grouping by size fields ensures
+    # we only surface the exact duplicates, not the whole name group.
+    merge_pipeline = [
+        {"$match": {"normalized_name": {"$nin": excluded}}},
+        {
+            "$group": {
+                "_id": {
+                    "normalized_name": "$normalized_name",
+                    "size_value": "$size.value",
+                    "size_unit": "$size.unit",
+                    "size_pack": "$size.pack_count",
+                },
+                "count": {"$sum": 1},
+                "stores": {"$addToSet": {"$ifNull": ["$store_id", ""]}},
+                "sample_names": {"$addToSet": {"$ifNull": ["$name", ""]}},
+                "match_keys": {"$addToSet": {"$ifNull": ["$match_key", ""]}},
+                "brands": {"$addToSet": {"$ifNull": ["$brand", ""]}},
+            }
+        },
+        {"$match": {"count": {"$gt": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": top_k},
+    ]
+    merge_rows = list(mongo.products.aggregate(merge_pipeline))
+
+    match_key_conflicts: list[dict[str, Any]] = []
+    for row in merge_rows:
+        _id = row.get("_id") or {}
+        normalized_name = str(_id.get("normalized_name", "")).strip()
+        if not normalized_name:
+            continue
+        sample_names = _non_empty(row.get("sample_names") or [])
+        stores = _non_empty(row.get("stores") or [])
+        brands = _non_empty(row.get("brands") or [])
+        match_keys = _non_empty(row.get("match_keys") or [])
+
+        si = SizeInfo(
+            value=_id.get("size_value"),
+            unit=_id.get("size_unit"),
+            pack_count=_id.get("size_pack"),
+        )
+        size_label = _format_size(si)
+
+        match_key_conflicts.append({
+            "normalized_name": normalized_name,
+            "sample_name": sample_names[0] if sample_names else normalized_name,
+            "count": int(row.get("count", 0)),
+            "stores": stores,
+            "brands": brands,
+            "categories": [],
+            "match_keys_count": len(match_keys),
+            "sizes": [size_label] if size_label != "—" else [],
+            "sizes_label": size_label,
+            "packs_label": _format_pack(si) or "—",
+            "measures_label": _format_measure(si) or "—",
+        })
 
     return (
         brand_conflicts[:top_k],
