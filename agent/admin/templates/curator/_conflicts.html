@@ -10,7 +10,7 @@
         <form method="post" action="/admin/curator/merge-all" class="curator-action-form async-action-form inline" hx-post="/admin/curator/merge-all" hx-target="#tbody-match-key-conflicts" hx-swap="innerHTML swap:150ms">
           <input type="hidden" name="limit" value="{{ limit }}">
           {% for row in match_key_conflicts %}
-          <input type="hidden" name="normalized_names" value="{{ row.normalized_name }}">
+          <input type="hidden" name="merge_entries" value="{{ row.normalized_name }}|{{ row.size_value|default('', true) }}|{{ row.size_unit|default('', true) }}|{{ row.size_pack|default('', true) }}">
           {% endfor %}
           <button
             type="submit"

@@ -3262,11 +3262,35 @@ async def curator_clear_manual_flags(
     )
 
 
+def _parse_merge_entries(form) -> list[tuple[str, dict[str, Any] | None]]:
+    """Parse merge_entries form values (name|sv|su|sp) into (key, size_filter) pairs.
+
+    Falls back to normalized_names for backward compat (brand/category conflict tables).
+    """
+    raw_entries = form.getlist("merge_entries")
+    if raw_entries:
+        results: list[tuple[str, dict[str, Any] | None]] = []
+        for entry in raw_entries:
+            parts = str(entry).split("|", 3)
+            name = parts[0].strip()
+            if not name:
+                continue
+            sv = parts[1] if len(parts) > 1 else ""
+            su = parts[2] if len(parts) > 2 else ""
+            sp = parts[3] if len(parts) > 3 else ""
+            sf = _size_filter_query(sv, su, sp) or None
+            results.append((name, sf))
+        return results
+    # Fallback: old-style normalized_names (no size filter)
+    keys = _visible_cluster_keys(form)
+    return [(k, None) for k in keys]
+
+
 @router.post("/curator/merge-all", response_class=HTMLResponse)
 async def curator_merge_all(request: Request, limit: int = Form(25)):
     form = await request.form()
-    keys = _visible_cluster_keys(form)
-    if not keys:
+    entries = _parse_merge_entries(form)
+    if not entries:
         return _curator_feedback(
             request,
             limit=limit,
@@ -3279,9 +3303,9 @@ async def curator_merge_all(request: Request, limit: int = Form(25)):
     merged_docs = 0
     removed_docs = 0
     skipped = 0
-    for key in keys:
+    for key, sf in entries:
         try:
-            result = _execute_merge_cluster(mongo, key)
+            result = _execute_merge_cluster(mongo, key, size_filter=sf)
         except ValueError:
             skipped += 1
             continue
