@@ -469,12 +469,12 @@ def _collect_curator_conflicts(
             brand_conflicts.append(payload)
         if len(categories) > 1:
             category_conflicts.append(payload)
-        # Flag any group where count > 1 and sizes are NOT mixed.
-        # This catches both:
-        #  - exact match_key duplicates (same hash, multiple docs — e.g. "Kraft Non Dairy Creamer" vs "Kraft Non Dairy Creamer .")
-        #  - near-duplicates with different match_keys (brand/size variation causing hash split)
+        # Flag when products outnumber unique sizes — at least one size
+        # has multiple docs that should likely be merged.  This catches:
+        #  - all-same-size duplicates (old behaviour)
+        #  - mixed-size groups where SOME sizes repeat (e.g. 225g, 400g, 800g, 800g)
         count = int(row.get("count", 0))
-        if count > 1 and not has_mixed_sizes:
+        if count > len(size_signatures):
             match_key_conflicts.append(payload)
 
     return (
