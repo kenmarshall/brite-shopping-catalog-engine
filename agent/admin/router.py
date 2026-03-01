@@ -529,6 +529,10 @@ def _collect_curator_conflicts(
             "sizes_label": size_label,
             "packs_label": _format_pack(si) or "—",
             "measures_label": _format_measure(si) or "—",
+            # Raw size fields for filtering in review/merge
+            "size_value": _id.get("size_value"),
+            "size_unit": _id.get("size_unit") or "",
+            "size_pack": _id.get("size_pack"),
         })
 
     return (
@@ -1080,11 +1084,18 @@ def _normalize_cluster_name(normalized_name: str) -> str:
     return normalize_name(normalized_name or "")
 
 
-def _cluster_products(mongo: MongoService, normalized_name: str) -> list[dict[str, Any]]:
+def _cluster_products(
+    mongo: MongoService,
+    normalized_name: str,
+    size_filter: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     key = _normalize_cluster_name(normalized_name)
     if not key:
         return []
-    return list(mongo.products.find({"normalized_name": key}))
+    query: dict[str, Any] = {"normalized_name": key}
+    if size_filter:
+        query.update(size_filter)
+    return list(mongo.products.find(query))
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -1166,8 +1177,12 @@ def _dominant_size(docs: list[dict[str, Any]]) -> SizeInfo:
     return SizeInfo(value=winner[0], unit=winner[1], pack_count=winner[2])
 
 
-def _execute_merge_cluster(mongo: MongoService, key: str) -> dict[str, Any]:
-    docs = _cluster_products(mongo, key)
+def _execute_merge_cluster(
+    mongo: MongoService,
+    key: str,
+    size_filter: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    docs = _cluster_products(mongo, key, size_filter=size_filter)
     if len(docs) < 2:
         raise ValueError("Cluster has fewer than 2 products, nothing to merge")
     size_signatures = _size_signatures_from_docs(docs)
@@ -2666,14 +2681,39 @@ async def scrape_status(request: Request):
 # ---- Curator ----
 
 
+def _size_filter_query(sv: str, su: str, sp: str) -> dict[str, Any]:
+    """Build a MongoDB size sub-query from review/merge size params."""
+    q: dict[str, Any] = {}
+    if sv:
+        try:
+            q["size.value"] = float(sv)
+        except ValueError:
+            pass
+    if su:
+        q["size.unit"] = su
+    if sp:
+        try:
+            q["size.pack_count"] = int(sp)
+        except ValueError:
+            pass
+    return q
+
+
 @router.get("/curator/review/{normalized_name:path}", response_class=HTMLResponse)
 async def curator_review(
     request: Request,
     normalized_name: str,
+    sv: str = Query("", description="Size value filter"),
+    su: str = Query("", description="Size unit filter"),
+    sp: str = Query("", description="Size pack_count filter"),
     message: str = Query("", alias="message"),
     error: str = Query("", alias="error"),
 ):
-    """Review page showing all products that share a normalized_name, with inline actions."""
+    """Review page showing products that share a normalized_name.
+
+    When sv/su/sp size params are provided (from merge-miss links), only
+    products matching that exact size are shown.
+    """
     mongo = _get_mongo()
     key = _normalize_cluster_name(normalized_name)
     if not key:
@@ -2682,7 +2722,9 @@ async def curator_review(
             fallback_path="/admin/curator",
             error="Invalid product name",
         )
-    docs = list(mongo.products.find({"normalized_name": key}))
+    query: dict[str, Any] = {"normalized_name": key}
+    query.update(_size_filter_query(sv, su, sp))
+    docs = list(mongo.products.find(query))
     if not docs:
         return _feedback_response(
             request,
@@ -2775,6 +2817,9 @@ async def curator_review(
             "standard_categories": STANDARD_CATEGORIES,
             "message": message,
             "error": error,
+            "size_filter_sv": sv,
+            "size_filter_su": su,
+            "size_filter_sp": sp,
             "page_title": f"Review: {docs[0].get('name', key)}",
             "active_nav": "curator",
         },
@@ -3075,14 +3120,18 @@ def _curator_feedback(
 async def curator_merge_cluster(
     request: Request,
     normalized_name: str = Form(...),
+    sv: str = Form(""),
+    su: str = Form(""),
+    sp: str = Form(""),
     limit: int = Form(25),
 ):
     mongo = _get_mongo()
     key = _normalize_cluster_name(normalized_name)
     if not key:
         return _curator_feedback(request, limit=limit, error="Invalid cluster name")
+    sf = _size_filter_query(sv, su, sp) or None
     try:
-        result = _execute_merge_cluster(mongo, key)
+        result = _execute_merge_cluster(mongo, key, size_filter=sf)
     except ValueError as exc:
         return _curator_feedback(request, limit=limit, error=str(exc))
 

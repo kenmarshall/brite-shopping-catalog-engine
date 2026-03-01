@@ -20,6 +20,9 @@
   <form method="post" action="/admin/curator/merge" class="async-action-form inline"
     hx-post="/admin/curator/merge" hx-swap="none">
     <input type="hidden" name="normalized_name" value="{{ normalized_name }}">
+    <input type="hidden" name="sv" value="{{ size_filter_sv }}">
+    <input type="hidden" name="su" value="{{ size_filter_su }}">
+    <input type="hidden" name="sp" value="{{ size_filter_sp }}">
     <button type="submit"
       class="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
       data-loading-text="Merging...">

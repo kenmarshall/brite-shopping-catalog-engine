@@ -49,9 +49,12 @@
           <td class="px-4 py-3 text-xs text-gray-700">{{ row.brands | join(', ') if row.brands else '—' }}</td>
           <td class="px-4 py-3 text-right">
             <div class="inline-flex items-center gap-2">
-              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/curator/review/{{ row.normalized_name }}?sv={{ row.size_value|default('', true) }}&su={{ row.size_unit|default('', true) }}&sp={{ row.size_pack|default('', true) }}" class="text-xs text-brand hover:underline">Review</a>
               <form method="post" action="/admin/curator/merge" class="curator-action-form async-action-form inline" hx-post="/admin/curator/merge" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
                 <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="sv" value="{{ row.size_value|default('', true) }}">
+                <input type="hidden" name="su" value="{{ row.size_unit|default('', true) }}">
+                <input type="hidden" name="sp" value="{{ row.size_pack|default('', true) }}">
                 <input type="hidden" name="limit" value="{{ limit }}">
                 <button
                   type="submit"
