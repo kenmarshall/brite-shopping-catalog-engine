@@ -1,8 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="mb-6">
-  <a href="/admin/curator" class="text-sm text-brand hover:underline">&larr; Back to curator</a>
+  <a href="{{ back_url }}" class="text-sm text-brand hover:underline">&larr; Back to curator</a>
+  {% if ref == 'merge_miss' %}
+  <h2 class="mt-1 text-2xl font-bold">Deduplication Review</h2>
+  {% elif ref == 'name_size' %}
+  <h2 class="mt-1 text-2xl font-bold">Normalization Review</h2>
+  {% elif ref == 'conflicts' %}
+  <h2 class="mt-1 text-2xl font-bold">Conflict Review</h2>
+  {% else %}
   <h2 class="mt-1 text-2xl font-bold">Cluster Review</h2>
+  {% endif %}
   <p class="mt-1 text-sm text-gray-500">
     {{ product_count }} product{{ 's' if product_count != 1 else '' }} sharing normalized name
     <span class="font-mono">{{ normalized_name }}</span>

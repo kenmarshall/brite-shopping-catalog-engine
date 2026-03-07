@@ -2,7 +2,7 @@
   <div class="border-b px-5 py-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h3 class="text-lg font-semibold">Name and Size Normalization Candidates</h3>
+        <h3 class="text-lg font-semibold">Normalization Candidates</h3>
         <p class="mt-1 text-xs text-gray-500">
           Fix mixed/all-caps names, remove size tokens from names, and sync parsed size metadata.
         </p>
@@ -61,7 +61,7 @@
           <td class="px-4 py-3 text-xs text-gray-700">{{ row.reasons | join(', ') }}</td>
           <td class="px-4 py-3 text-right">
             <div class="inline-flex items-center gap-2">
-              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/curator/review/{{ row.normalized_name }}?ref=name_size" class="text-xs text-brand hover:underline">Review</a>
               <a href="/admin/products/{{ row.product_id }}" class="text-xs text-gray-500 hover:underline">Edit</a>
               <form method="post" action="/admin/curator/normalize-name-size" class="curator-action-form async-action-form inline" hx-post="/admin/curator/normalize-name-size" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
                 <input type="hidden" name="product_id" value="{{ row.product_id }}">
@@ -71,7 +71,7 @@
                   class="rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
                   data-loading-text="Normalizing..."
                 >
-                  Normalize Name+Size
+                  Normalize
                 </button>
               </form>
               <form method="post" action="/admin/curator/dismiss" class="async-action-form inline" hx-post="/admin/curator/dismiss" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
@@ -87,7 +87,7 @@
         {% if not name_cleanup_candidates %}
         <tr>
           <td colspan="6" class="px-4 py-10 text-center text-gray-400">
-            No name/size normalization candidates found
+            No normalization candidates found
           </td>
         </tr>
         {% endif %}

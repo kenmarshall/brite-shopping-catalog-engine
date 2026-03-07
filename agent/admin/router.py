@@ -57,6 +57,7 @@ _EMPTY_ROW_CATEGORY = '<tr><td colspan="6" class="px-4 py-10 text-center text-gr
 _EMPTY_ROW_FLAGS = '<tr><td colspan="6" class="px-4 py-10 text-center text-gray-400">No manual merge flags yet</td></tr>'
 _EMPTY_ROW_NAME_SIZE = '<tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">No name/size normalization candidates found</td></tr>'
 _EMPTY_ROW_PHOTOS = '<tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">No missing-photo products found</td></tr>'
+_EMPTY_ROW_BARCODES = '<tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">No products missing barcodes found</td></tr>'
 
 
 _mongo_instance: MongoService | None = None
@@ -728,6 +729,46 @@ def _collect_missing_photo_candidates(
     return docs, total_missing
 
 
+def _collect_missing_barcode_candidates(
+    mongo: MongoService,
+    *,
+    top_k: int = 25,
+) -> tuple[list[dict[str, Any]], int]:
+    dismissed = _dismissed_names(mongo, "missing-barcodes")
+    barcoded_ids: set[str] = set(mongo.barcode_mappings.distinct("product_id"))
+    barcoded_oids = [ObjectId(pid) for pid in barcoded_ids if ObjectId.is_valid(pid)]
+    missing_barcode_query: dict[str, Any] = {}
+    if barcoded_oids:
+        missing_barcode_query["_id"] = {"$nin": barcoded_oids}
+    if dismissed:
+        missing_barcode_query["normalized_name"] = {"$nin": list(dismissed)}
+    total_missing = mongo.products.count_documents(missing_barcode_query)
+    docs = list(
+        mongo.products.find(
+            missing_barcode_query,
+            {
+                "name": 1,
+                "store_id": 1,
+                "store_name": 1,
+                "brand": 1,
+                "category": 1,
+                "normalized_name": 1,
+                "size": 1,
+                "updated_at": 1,
+            },
+        )
+        .sort("updated_at", -1)
+        .limit(top_k)
+    )
+    for doc in docs:
+        doc["_id"] = str(doc["_id"])
+        _si = _size_info_from_doc(doc)
+        doc["_size_label"] = _format_size(_si)
+        doc["_pack_label"] = _format_pack(_si)
+        doc["_measure_label"] = _format_measure(_si)
+    return docs, total_missing
+
+
 PRICE_ANOMALY_RATIO = 2.5  # flag when max/min price ratio exceeds this
 
 
@@ -917,12 +958,17 @@ def _build_curator_snapshot(
             mongo, top_k=capped_limit,
         )
 
+    def _run_missing_barcodes():
+        results["missing_barcodes"] = _collect_missing_barcode_candidates(
+            mongo, top_k=capped_limit,
+        )
+
     def _run_price_anomalies():
         results["price_anomalies"] = _collect_price_anomalies(
             mongo, top_k=capped_limit,
         )
 
-    tasks = [_run_conflicts, _run_manual_flags, _run_name_cleanup, _run_missing_photos, _run_price_anomalies]
+    tasks = [_run_conflicts, _run_manual_flags, _run_name_cleanup, _run_missing_photos, _run_missing_barcodes, _run_price_anomalies]
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         futures = [pool.submit(fn) for fn in tasks]
         for future in as_completed(futures):
@@ -932,6 +978,7 @@ def _build_curator_snapshot(
     manual_merge_flags, flagged_product_total = results["manual_flags"]
     name_cleanup_candidates, name_cleanup_total = results["name_cleanup"]
     missing_photo_candidates, missing_photo_total = results["missing_photos"]
+    missing_barcode_candidates, missing_barcode_total = results["missing_barcodes"]
     price_anomalies = results["price_anomalies"]
 
     now = datetime.utcnow()
@@ -951,6 +998,8 @@ def _build_curator_snapshot(
         "name_cleanup_total": int(name_cleanup_total),
         "missing_photo_candidates": missing_photo_candidates,
         "missing_photo_total": int(missing_photo_total),
+        "missing_barcode_candidates": missing_barcode_candidates,
+        "missing_barcode_total": int(missing_barcode_total),
         "price_anomalies": price_anomalies,
     }
 
@@ -1001,6 +1050,10 @@ def _refresh_curator_section(
         candidates, total = _collect_missing_photo_candidates(mongo, top_k=capped_limit)
         updates["missing_photo_candidates"] = candidates
         updates["missing_photo_total"] = int(total)
+    elif section == "missing-barcodes":
+        candidates, total = _collect_missing_barcode_candidates(mongo, top_k=capped_limit)
+        updates["missing_barcode_candidates"] = candidates
+        updates["missing_barcode_total"] = int(total)
     elif section == "price-anomalies":
         updates["price_anomalies"] = _collect_price_anomalies(mongo, top_k=capped_limit)
     else:
@@ -1945,6 +1998,7 @@ async def product_detail(
     product_id: str,
     message: str = Query("", alias="message"),
     error: str = Query("", alias="error"),
+    back: str = Query("", alias="back"),
 ):
     oid = _object_id_or_none(product_id)
     if oid is None:
@@ -1953,6 +2007,8 @@ async def product_detail(
     payload = _product_detail_payload(mongo, oid)
     if not payload:
         return HTMLResponse("Product not found", status_code=404)
+    from urllib.parse import unquote
+    back_url = unquote(back) if back else "/admin/products"
     return templates.TemplateResponse(
         "products/detail.html",
         {
@@ -1962,12 +2018,17 @@ async def product_detail(
             "error": error,
             "page_title": f"Edit: {payload['product'].get('name', '')[:40]}",
             "active_nav": "products",
+            "back_url": back_url,
         },
     )
 
 
 @router.get("/products/{product_id}/section/content", response_class=HTMLResponse)
-async def product_detail_content_partial(request: Request, product_id: str):
+async def product_detail_content_partial(
+    request: Request,
+    product_id: str,
+    back: str = Query("", alias="back"),
+):
     oid = _object_id_or_none(product_id)
     if oid is None:
         return HTMLResponse("Invalid product ID", status_code=400)
@@ -1975,11 +2036,14 @@ async def product_detail_content_partial(request: Request, product_id: str):
     payload = _product_detail_payload(mongo, oid)
     if not payload:
         return HTMLResponse("Product not found", status_code=404)
+    from urllib.parse import unquote
+    back_url = unquote(back) if back else "/admin/products"
     return templates.TemplateResponse(
         "products/_detail_content.html",
         {
             "request": request,
             **payload,
+            "back_url": back_url,
         },
     )
 
@@ -2277,7 +2341,7 @@ def _stores_payload(mongo: MongoService) -> list[dict[str, Any]]:
 
     settings_map = {
         doc["store_id"]: doc
-        for doc in mongo.store_settings.find({}, {"store_id": 1, "visible": 1, "entity_type": 1})
+        for doc in mongo.store_settings.find({}, {"store_id": 1, "visible": 1, "entity_type": 1, "is_store": 1})
     }
     # Load Google Place data keyed by source_id (store_id)
     place_data = {
@@ -2290,6 +2354,9 @@ def _stores_payload(mongo: MongoService) -> list[dict[str, Any]]:
         settings = settings_map.get(row["source_id"], {})
         row["visible"] = settings.get("visible", True)
         row["entity_type"] = row.get("entity_type") or settings.get("entity_type", "store")
+        # is_store defaults to True for store entity_type, False for brands/other
+        entity_type = row["entity_type"]
+        row["is_store"] = settings["is_store"] if "is_store" in settings else (entity_type == "store")
         place = place_data.get(row["source_id"], {})
         row["place_id"] = place.get("place_id")
         row["place_address"] = place.get("address")
@@ -2344,6 +2411,35 @@ async def store_toggle_visibility(
         request,
         fallback_path="/admin/stores",
         message=f"Store '{store_id}' is now {label} in the app",
+        events=["admin:stores-refresh"],
+    )
+
+
+@router.post("/stores/toggle-is-store", response_class=HTMLResponse)
+async def store_toggle_is_store(
+    request: Request,
+    store_id: str = Form(...),
+):
+    mongo = _get_mongo()
+    current = mongo.store_settings.find_one({"store_id": store_id})
+    # Default: stores are is_store=True, brands are is_store=False
+    source_entity_type = "store"
+    for src in _load_sources():
+        if src.get("source_id") == store_id:
+            source_entity_type = src.get("entity_type", "store")
+            break
+    default_is_store = source_entity_type == "store"
+    new_is_store = not current.get("is_store", default_is_store) if current else not default_is_store
+    mongo.store_settings.update_one(
+        {"store_id": store_id},
+        {"$set": {"is_store": new_is_store}},
+        upsert=True,
+    )
+    label = "a store (prices shown in app)" if new_is_store else "a source only (prices excluded from app)"
+    return _feedback_response(
+        request,
+        fallback_path="/admin/stores",
+        message=f"'{store_id}' is now {label}",
         events=["admin:stores-refresh"],
     )
 
@@ -2691,11 +2787,15 @@ def _size_filter_query(sv: str, su: str, sp: str) -> dict[str, Any]:
             pass
     if su:
         q["size.unit"] = su
+    # When a size filter is active, explicitly match pack_count —
+    # including null/missing when sp is empty (means "no pack").
     if sp:
         try:
             q["size.pack_count"] = int(sp)
         except ValueError:
             pass
+    elif sv or su:
+        q["size.pack_count"] = {"$in": [None]}
     return q
 
 
@@ -2706,6 +2806,7 @@ async def curator_review(
     sv: str = Query("", description="Size value filter"),
     su: str = Query("", description="Size unit filter"),
     sp: str = Query("", description="Size pack_count filter"),
+    ref: str = Query("", description="Source section: name_size | conflicts | merge_miss"),
     message: str = Query("", alias="message"),
     error: str = Query("", alias="error"),
 ):
@@ -2742,6 +2843,7 @@ async def curator_review(
         doc["_pack_label"] = _format_pack(si)
         doc["_measure_label"] = _format_measure(si)
         doc["_size_label"] = _format_size(si)
+        doc["_display_name"] = normalize_display_name(strip_size_from_name(doc.get("name") or "")) or doc.get("name") or ""
         doc["_has_image"] = bool(
             doc.get("image_url")
             and not str(doc.get("image_url", "")).startswith("data:image/svg")
@@ -2799,6 +2901,56 @@ async def curator_review(
             ),
         }
 
+    _ref_anchor_map = {
+        "name_size": "#curator-name-size",
+        "conflicts": "#curator-conflicts",
+        "merge_miss": "#curator-conflicts",
+    }
+    back_url = "/admin/curator" + _ref_anchor_map.get(ref, "")
+
+    # Build the URL of this review page (for use as a `back` param on Edit links)
+    from urllib.parse import urlencode, quote as _url_quote
+    _review_params: dict[str, str] = {}
+    if sv: _review_params["sv"] = sv
+    if su: _review_params["su"] = su
+    if sp: _review_params["sp"] = sp
+    if ref: _review_params["ref"] = ref
+    _review_self = f"/admin/curator/review/{key}"
+    if _review_params:
+        _review_self += "?" + urlencode(_review_params)
+    review_back_url = _url_quote(_review_self, safe="")
+
+    # Per-product normalization preview for the Normalization Review page
+    normalization_previews: list[dict[str, Any]] = []
+    if ref == "name_size":
+        for doc in docs:
+            original_name = str(doc.get("name") or "").strip()
+            if not original_name:
+                continue
+            suggested_name = _cleanup_name_suggestion(original_name)
+            existing_size = _size_info_from_doc(doc)
+            inferred_size = parse_size(original_name)
+            has_size_data = (
+                inferred_size.value is not None
+                or inferred_size.unit is not None
+                or inferred_size.pack_count
+            )
+            final_size = inferred_size if has_size_data else existing_size
+            normalization_previews.append(
+                {
+                    "product_id": str(doc["_id"]),
+                    "current_name": original_name,
+                    "suggested_name": suggested_name,
+                    "name_changes": original_name != suggested_name,
+                    "current_size": _format_size(existing_size),
+                    "suggested_size": _format_size(final_size),
+                    "size_changes": _format_size(existing_size) != _format_size(final_size),
+                    "current_pack": _format_pack(existing_size),
+                    "suggested_pack": _format_pack(final_size),
+                    "pack_changes": _format_pack(existing_size) != _format_pack(final_size),
+                }
+            )
+
     return templates.TemplateResponse(
         "curator/review.html",
         {
@@ -2814,12 +2966,16 @@ async def curator_review(
             "has_mixed_sizes": has_mixed_sizes,
             "can_merge": can_merge,
             "merge_preview": merge_preview,
+            "normalization_previews": normalization_previews,
             "standard_categories": STANDARD_CATEGORIES,
             "message": message,
             "error": error,
             "size_filter_sv": sv,
             "size_filter_su": su,
             "size_filter_sp": sp,
+            "ref": ref,
+            "back_url": back_url,
+            "review_back_url": review_back_url,
             "page_title": f"Review: {docs[0].get('name', key)}",
             "active_nav": "curator",
         },
@@ -2876,6 +3032,7 @@ _SECTION_EVENTS: dict[str, list[str]] = {
     "manual-flags": ["admin:curator-refresh-flags", "admin:curator-refresh-summary"],
     "name-size": ["admin:curator-refresh-name-size", "admin:curator-refresh-summary"],
     "missing-photos": ["admin:curator-refresh-photos", "admin:curator-refresh-summary"],
+    "missing-barcodes": ["admin:curator-refresh-barcodes", "admin:curator-refresh-summary"],
     "price-anomalies": ["admin:curator-refresh-price-anomalies", "admin:curator-refresh-summary"],
 }
 
@@ -2884,6 +3041,7 @@ _SECTION_LABELS: dict[str, str] = {
     "manual-flags": "Manual Merge Flags",
     "name-size": "Name & Size Normalization",
     "missing-photos": "Missing Photos",
+    "missing-barcodes": "Missing Barcodes",
     "price-anomalies": "Price Anomalies",
 }
 
@@ -2942,6 +3100,7 @@ async def curator_summary_partial(
             "flagged_product_total": int(snapshot.get("flagged_product_total") or 0),
             "name_cleanup_total": len(name_cleanup_candidates),
             "missing_photo_total": int(snapshot.get("missing_photo_total") or 0),
+            "missing_barcode_total": int(snapshot.get("missing_barcode_total") or 0),
         },
     )
 
@@ -3028,6 +3187,27 @@ async def curator_missing_photos_partial(
             "request": request,
             "missing_photo_candidates": missing_photo_candidates,
             "missing_photo_total": missing_photo_total,
+            "limit": row_limit,
+        },
+    )
+
+
+@router.get("/curator/sections/missing-barcodes", response_class=HTMLResponse)
+async def curator_missing_barcodes_partial(
+    request: Request,
+    limit: int = Query(25, ge=5, le=100),
+):
+    mongo = _get_mongo()
+    snapshot = _load_curator_snapshot(mongo, ensure=True)
+    row_limit = _curator_row_limit(limit)
+    missing_barcode_candidates = _snapshot_rows(snapshot, "missing_barcode_candidates", row_limit)
+    missing_barcode_total = int(snapshot.get("missing_barcode_total") or 0)
+    return templates.TemplateResponse(
+        "curator/_missing_barcodes.html",
+        {
+            "request": request,
+            "missing_barcode_candidates": missing_barcode_candidates,
+            "missing_barcode_total": missing_barcode_total,
             "limit": row_limit,
         },
     )
@@ -3124,6 +3304,7 @@ async def curator_merge_cluster(
     su: str = Form(""),
     sp: str = Form(""),
     limit: int = Form(25),
+    back_url: str = Form(""),
 ):
     mongo = _get_mongo()
     key = _normalize_cluster_name(normalized_name)
@@ -3135,16 +3316,26 @@ async def curator_merge_cluster(
     except ValueError as exc:
         return _curator_feedback(request, limit=limit, error=str(exc))
 
-    return _curator_feedback(
-        request,
-        limit=limit,
-        mongo=mongo,
-        hx_body="",
-        message=(
-            f"Merged {result['docs']} products for '{result['canonical_name']}'. "
-            f"Removed {result['duplicates_removed']} duplicates. Action #{result['action_id']}."
-        ),
+    message = (
+        f"Merged {result['docs']} products for '{result['canonical_name']}'. "
+        f"Removed {result['duplicates_removed']} duplicates. Action #{result['action_id']}."
     )
+    # Refresh curator snapshot
+    try:
+        _refresh_curator_snapshot(mongo, row_cap=CURATOR_SNAPSHOT_ROW_CAP)
+    except Exception as exc:
+        LOGGER.warning("Unable to refresh curator snapshot after merge: %s", exc)
+        _mark_curator_snapshot_stale(mongo, reason="Curator action changed data. Run Scan Now to refresh snapshot.")
+
+    redirect_to = back_url or "/admin/curator"
+    if _is_hx_request(request):
+        response = HTMLResponse("")
+        response.headers["HX-Redirect"] = redirect_to
+        return response
+    from urllib.parse import urlencode
+    params = urlencode({"message": message, "limit": limit})
+    sep = "&" if "?" in redirect_to else "?"
+    return RedirectResponse(f"{redirect_to}{sep}{params}", status_code=303)
 
 
 @router.post("/curator/normalize-brand", response_class=HTMLResponse)

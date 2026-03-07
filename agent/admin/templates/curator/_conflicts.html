@@ -1,7 +1,7 @@
 <section class="rounded-xl bg-white shadow">
   <div class="border-b px-5 py-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <h3 class="text-lg font-semibold">Potential Merge Misses (Match Key Conflicts, Same Size)</h3>
+      <h3 class="text-lg font-semibold">Potential Duplicates</h3>
       <div class="inline-flex items-center gap-2">
         <form method="post" action="/admin/curator/scan/conflicts" class="async-action-form inline" hx-post="/admin/curator/scan/conflicts" hx-swap="none">
           <input type="hidden" name="limit" value="{{ limit }}">
@@ -49,7 +49,7 @@
           <td class="px-4 py-3 text-xs text-gray-700">{{ row.brands | join(', ') if row.brands else '—' }}</td>
           <td class="px-4 py-3 text-right">
             <div class="inline-flex items-center gap-2">
-              <a href="/admin/curator/review/{{ row.normalized_name }}?sv={{ row.size_value|default('', true) }}&su={{ row.size_unit|default('', true) }}&sp={{ row.size_pack|default('', true) }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/curator/review/{{ row.normalized_name }}?sv={{ row.size_value|default('', true) }}&su={{ row.size_unit|default('', true) }}&sp={{ row.size_pack|default('', true) }}&ref=merge_miss" class="text-xs text-brand hover:underline">Review</a>
               <form method="post" action="/admin/curator/merge" class="curator-action-form async-action-form inline" hx-post="/admin/curator/merge" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
                 <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
                 <input type="hidden" name="sv" value="{{ row.size_value|default('', true) }}">
@@ -138,7 +138,7 @@
           <td class="px-4 py-3 text-xs text-gray-700">{{ row.stores | join(', ') }}</td>
           <td class="px-4 py-3 text-right">
             <div class="inline-flex items-center gap-2">
-              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/curator/review/{{ row.normalized_name }}?ref=conflicts" class="text-xs text-brand hover:underline">Review</a>
               <form method="post" action="/admin/curator/normalize-brand" class="curator-action-form async-action-form inline" hx-post="/admin/curator/normalize-brand" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
                 <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
                 <input type="hidden" name="limit" value="{{ limit }}">
@@ -222,7 +222,7 @@
           <td class="px-4 py-3 text-xs text-gray-700">{{ row.stores | join(', ') }}</td>
           <td class="px-4 py-3 text-right">
             <div class="inline-flex items-center gap-2">
-              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/curator/review/{{ row.normalized_name }}?ref=conflicts" class="text-xs text-brand hover:underline">Review</a>
               <form method="post" action="/admin/curator/normalize-category" class="curator-action-form async-action-form inline-flex items-center gap-1" hx-post="/admin/curator/normalize-category" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
                 <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
                 <input type="hidden" name="limit" value="{{ limit }}">

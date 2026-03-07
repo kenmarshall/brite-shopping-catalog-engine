@@ -1,6 +1,6 @@
 <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
   <div>
-    <a href="/admin/products" class="text-sm text-brand hover:underline">&larr; Back to products</a>
+    <a href="{{ back_url | default('/admin/products') }}" class="text-sm text-brand hover:underline">&larr; Back</a>
     <h2 class="mt-1 text-2xl font-bold">Edit Product</h2>
   </div>
   <form

@@ -5,7 +5,7 @@ import re
 
 from agent.db.models import SizeInfo
 
-MEASURE_UNITS = r"ml|l|litre|liter|g|kg|oz|fl\s*oz|lb|lbs|gal|gallon|gallons|pt|pint|pints|qt|quart|quarts|cl|mg"
+MEASURE_UNITS = r"ml|l|litres?|liters?|g|kg|mg|oz|fl\s*oz|lb|lbs|gal|gallons?|pt|pints?|qt|quarts?|cl"
 COUNT_UNITS = r"packs?|pk|ct|count"
 
 MULTIPACK_PATTERN = re.compile(
@@ -16,6 +16,7 @@ PACK_COUNT_PATTERN = re.compile(
     rf"\b(?:pack\s*of\s*(?P<count_a>\d+)|(?P<count_b>\d+)\s*(?:{COUNT_UNITS}))\b",
     re.IGNORECASE,
 )
+PER_DOZEN_PATTERN = re.compile(r"\bper\s+doz(?:en)?\b", re.IGNORECASE)
 MEASURE_SIZE_PATTERN = re.compile(
     rf"\b(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>{MEASURE_UNITS})\b",
     re.IGNORECASE,
@@ -27,6 +28,7 @@ COUNT_SIZE_PATTERN = re.compile(
 SIZE_TOKEN_PATTERN = re.compile(
     rf"\b\d+\s*[xX]\s*\d+(?:\.\d+)?\s*(?:{MEASURE_UNITS})\b"
     rf"|\bpack\s*of\s*\d+\b"
+    rf"|\bper\s+doz(?:en)?\b"
     rf"|\b\d+\s*(?:{COUNT_UNITS})\b"
     rf"|\b\d+(?:\.\d+)?\s*(?:{MEASURE_UNITS})\b",
     re.IGNORECASE,
@@ -54,16 +56,31 @@ def strip_size_from_name(name: str) -> str:
     return cleaned
 
 
+def _title_words(text: str) -> str:
+    """Capitalize the first letter of each space-separated word.
+
+    Python's str.title() incorrectly capitalizes after apostrophes,
+    turning "Women's" into "Women'S". This helper avoids that, and also
+    corrects existing data where the letter after an apostrophe is uppercase.
+    """
+    result = " ".join(w[0].upper() + w[1:].lower() if w else w for w in text.split(" "))
+    # Only lowercase after apostrophe when NOT followed by more lowercase letters.
+    # This fixes ".title()" artifacts like "Member'S" → "Member's" while
+    # preserving intentional caps like "K'Spicy" or "D'Angelo".
+    return re.sub(r"'([A-Z])(?![a-z])", lambda m: "'" + m.group(1).lower(), result)
+
+
 def normalize_display_name(name: str) -> str:
     cleaned = re.sub(r"\s+", " ", name).strip()
     if not cleaned:
         return ""
-    normalized = cleaned.title()
+    normalized = _title_words(cleaned)
     for token in DISPLAY_UPPER_TOKENS:
         normalized = re.sub(
             rf"\b{re.escape(token.title())}\b",
             token.upper(),
             normalized,
+            flags=re.IGNORECASE,
         )
     return normalized
 
@@ -85,7 +102,7 @@ def normalize_name_for_matching(name: str) -> str:
 def normalize_brand(brand: str | None) -> str | None:
     if not brand:
         return None
-    return brand.strip().title()
+    return _title_words(brand.strip())
 
 
 def normalize_category(category: str | None) -> str | None:
@@ -93,7 +110,7 @@ def normalize_category(category: str | None) -> str | None:
         return None
     # Take the first category if comma-separated (e.g. "Baby & Infant,Medicine" -> "Baby & Infant")
     first = category.split(",")[0].strip()
-    return first.title() if first else None
+    return _title_words(first) if first else None
 
 
 def parse_price(price_text: str) -> float | None:
@@ -116,7 +133,9 @@ def _normalize_unit(unit: str) -> str:
         "pk": "pack",
         "ct": "count",
         "litre": "l",
+        "litres": "l",
         "liter": "l",
+        "liters": "l",
         "floz": "oz",
         "lbs": "lb",
         "gallon": "gal",
@@ -145,9 +164,16 @@ def parse_size(text: str) -> SizeInfo:
         count_raw = pack_match.group("count_a") or pack_match.group("count_b")
         if count_raw:
             pack_count = int(count_raw)
-
-    measure_match = MEASURE_SIZE_PATTERN.search(text)
-    if measure_match:
+    # Collect all measure matches and prefer metric over imperial.
+    # This handles dual-unit labels like "1 Gallon 3.78 Litres" consistently.
+    _METRIC_UNITS = {"ml", "l", "g", "kg", "cl"}
+    all_measure_matches = list(MEASURE_SIZE_PATTERN.finditer(text))
+    if all_measure_matches:
+        metric = next(
+            (m for m in all_measure_matches if _normalize_unit(m.group("unit")) in _METRIC_UNITS),
+            None,
+        )
+        measure_match = metric or all_measure_matches[0]
         value = float(measure_match.group("value"))
         unit = _normalize_unit(measure_match.group("unit"))
         return SizeInfo(value=value, unit=unit, pack_count=pack_count)

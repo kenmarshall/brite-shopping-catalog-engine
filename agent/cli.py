@@ -10,6 +10,8 @@ from agent.embeddings.ollama_client import embed_sync
 from agent.scraping.normalizer import (
     build_checksum,
     build_match_key,
+    normalize_brand,
+    normalize_category,
     normalize_name,
     parse_price,
     parse_size,
@@ -606,6 +608,59 @@ def seed_barcodes(
     typer.echo(
         f"{'Would seed' if dry_run else 'Seeded'} {seeded} barcodes "
         f"(skipped {skipped} products without barcodes)"
+    )
+
+
+@app.command(name="fix-apostrophes")
+def fix_apostrophes(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing"),
+    field: Optional[str] = typer.Option(None, "--field", help="Limit to 'brand' or 'category' (default: both)"),
+) -> None:
+    """Fix 'S uppercase in brand/category fields caused by old .title() normalization.
+
+    Finds products where brand or category contains an apostrophe followed by an
+    uppercase letter (e.g. "Member'S") and re-applies the correct normalization.
+    """
+    import re
+
+    mongo = MongoService()
+    apostrophe_pattern = re.compile(r"'[A-Z]")
+    fields_to_check = []
+    if field in ("brand", None):
+        fields_to_check.append("brand")
+    if field in ("category", None):
+        fields_to_check.append("category")
+
+    query: dict = {
+        "$or": [
+            {f: {"$regex": r"'[A-Z]"}} for f in fields_to_check
+        ]
+    }
+    docs = list(mongo.products.find(query, {f: 1 for f in fields_to_check}))
+    typer.echo(f"Found {len(docs)} products with apostrophe-uppercase in {fields_to_check}")
+
+    updated = 0
+    for doc in docs:
+        changes: dict = {}
+        for f in fields_to_check:
+            val = doc.get(f)
+            if not val or not apostrophe_pattern.search(val):
+                continue
+            fixed = normalize_brand(val) if f == "brand" else normalize_category(val)
+            if fixed != val:
+                changes[f] = fixed
+        if not changes:
+            continue
+
+        if dry_run:
+            for f, fixed in changes.items():
+                typer.echo(f"  [{doc['_id']}] {f}: {doc[f]!r} → {fixed!r}")
+        else:
+            mongo.products.update_one({"_id": doc["_id"]}, {"$set": changes})
+        updated += 1
+
+    typer.echo(
+        f"{'Would update' if dry_run else 'Updated'} {updated} products"
     )
 
 

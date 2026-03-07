@@ -4,7 +4,7 @@
   <div>
     <h2 class="text-2xl font-bold">AI Curator</h2>
     <p class="mt-1 text-sm text-gray-500">
-      Review merge misses, normalize naming and sizes, and triage missing product photos.
+      Deduplicate products, normalize naming and sizes, and triage missing product photos.
     </p>
   </div>
   <div class="flex items-center gap-2">
@@ -130,6 +130,17 @@
     hx-sync="this:replace"
   >
     <div class="rounded-xl bg-white p-6 shadow text-sm text-gray-500 animate-pulse">Loading missing photo queue...</div>
+  </div>
+
+  <div
+    id="curator-missing-barcodes"
+    hx-get="/admin/curator/sections/missing-barcodes"
+    hx-vals='js:{limit: document.getElementById("curator-limit").value}'
+    hx-trigger="load, admin:curator-refresh from:body, admin:curator-refresh-barcodes from:body"
+    hx-swap="innerHTML"
+    hx-sync="this:replace"
+  >
+    <div class="rounded-xl bg-white p-6 shadow text-sm text-gray-500 animate-pulse">Loading missing barcode queue...</div>
   </div>
 
   <div

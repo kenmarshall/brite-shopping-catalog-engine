@@ -10,6 +10,7 @@
 <div
   id="product-detail-content"
   hx-get="/admin/products/{{ product._id }}/section/content"
+  hx-vals='js:{"back": new URLSearchParams(window.location.search).get("back") || ""}'
   hx-trigger="load, admin:product-detail-refresh from:body"
   hx-swap="innerHTML"
 >

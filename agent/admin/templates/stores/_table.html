@@ -1,13 +1,14 @@
 <table class="min-w-full text-sm">
   <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
     <tr>
-      <th class="px-4 py-3">Store</th>
+      <th class="px-4 py-3">Source</th>
       <th class="px-4 py-3">Source ID</th>
       <th class="px-4 py-3">Type</th>
       <th class="px-4 py-3">Strategy</th>
       <th class="px-4 py-3">Base URL</th>
       <th class="px-4 py-3">Location</th>
       <th class="px-4 py-3 text-right">Products</th>
+      <th class="px-4 py-3 text-center">Is Store</th>
       <th class="px-4 py-3 text-center">Visible</th>
     </tr>
   </thead>
@@ -67,6 +68,19 @@
       </td>
       <td class="px-4 py-3 text-right font-mono">{{ "{:,}".format(source.product_count) }}</td>
       <td class="px-4 py-3 text-center">
+        <form method="post" action="/admin/stores/toggle-is-store" class="async-action-form inline" hx-post="/admin/stores/toggle-is-store" hx-swap="none">
+          <input type="hidden" name="store_id" value="{{ source.source_id }}">
+          <button
+            type="submit"
+            class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium transition-colors {% if source.is_store %}bg-blue-50 text-blue-700 hover:bg-blue-100{% else %}bg-gray-100 text-gray-500 hover:bg-gray-200{% endif %}"
+            data-loading-text="..."
+            title="{% if source.is_store %}Prices shown as store prices in app — click to make source-only{% else %}Source only — prices not shown per-store in app — click to make a store{% endif %}"
+          >
+            {% if source.is_store %}Store{% else %}Source{% endif %}
+          </button>
+        </form>
+      </td>
+      <td class="px-4 py-3 text-center">
         <form method="post" action="/admin/stores/toggle-visibility" class="async-action-form inline" hx-post="/admin/stores/toggle-visibility" hx-swap="none">
           <input type="hidden" name="store_id" value="{{ source.source_id }}">
           <button
@@ -83,7 +97,7 @@
     {% endfor %}
     {% if not sources %}
     <tr>
-      <td colspan="8" class="px-4 py-10 text-center text-gray-400">No store sources configured</td>
+      <td colspan="9" class="px-4 py-10 text-center text-gray-400">No store sources configured</td>
     </tr>
     {% endif %}
   </tbody>

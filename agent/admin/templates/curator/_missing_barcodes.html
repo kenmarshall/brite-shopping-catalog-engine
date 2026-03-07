@@ -1,0 +1,63 @@
+<section class="rounded-xl bg-white shadow">
+  <div class="border-b px-5 py-4">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div>
+        <h3 class="text-lg font-semibold">Missing Barcode Queue</h3>
+        <p class="mt-1 text-xs text-gray-500">
+          Products without a barcode mapping — scan or enter barcodes to enable barcode lookup.
+        </p>
+      </div>
+      <div class="inline-flex items-center gap-2">
+        <form method="post" action="/admin/curator/scan/missing-barcodes" class="async-action-form inline" hx-post="/admin/curator/scan/missing-barcodes" hx-swap="none">
+          <input type="hidden" name="limit" value="{{ limit }}">
+          <button type="submit" class="rounded-md border border-gray-300 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100" data-loading-text="Scanning...">Scan</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+        <tr>
+          <th class="px-4 py-3">Product</th>
+          <th class="px-4 py-3">Size</th>
+          <th class="px-4 py-3">Store</th>
+          <th class="px-4 py-3">Brand/Category</th>
+          <th class="px-4 py-3 text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tbody-missing-barcodes" class="divide-y">
+        {% for row in missing_barcode_candidates %}
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-3">
+            <div class="font-medium text-gray-800">{{ row.name }}</div>
+            <div class="font-mono text-xs text-gray-500">{{ row.normalized_name }}</div>
+          </td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row._size_label }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.store_name or row.store_id }}</td>
+          <td class="px-4 py-3 text-xs text-gray-700">{{ row.brand or '—' }} / {{ row.category or '—' }}</td>
+          <td class="px-4 py-3 text-right">
+            <div class="inline-flex items-center gap-2">
+              <a href="/admin/curator/review/{{ row.normalized_name }}" class="text-xs text-brand hover:underline">Review</a>
+              <a href="/admin/products/{{ row._id }}" class="text-xs text-gray-500 hover:underline">Edit</a>
+              <form method="post" action="/admin/curator/dismiss" class="async-action-form inline" hx-post="/admin/curator/dismiss" hx-target="closest tr" hx-swap="outerHTML swap:150ms">
+                <input type="hidden" name="normalized_name" value="{{ row.normalized_name }}">
+                <input type="hidden" name="section" value="missing-barcodes">
+                <input type="hidden" name="limit" value="{{ limit }}">
+                <button type="submit" class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[10px] font-medium text-gray-500 hover:bg-gray-100" data-loading-text="..." title="Dismiss — not an issue">Dismiss</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not missing_barcode_candidates %}
+        <tr>
+          <td colspan="5" class="px-4 py-10 text-center text-gray-400">
+            No products missing barcodes found
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
